@@ -1,0 +1,32 @@
+[project]
+name = "ageo"
+version = "0.1.0"
+description = "Autonomous GIS Workbench - deterministic geospatial automation core"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "pyproj>=3.6",
+    "pyogrio>=0.8",
+    "fastapi>=0.139.0",
+    "uvicorn[standard]>=0.49.0",
+    "python-multipart>=0.0.32",
+    "litellm>=1.90.2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ageo"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

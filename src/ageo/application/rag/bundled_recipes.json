@@ -1,0 +1,19 @@
+{
+  "recipes": [
+    {
+      "name": "proximity_site_search",
+      "keywords": ["near", "close", "distance", "within", "school", "road", "house", "rent", "site", "suitable", "yakin", "mesafe", "okul", "yol", "ev", "kiralik", "kira", "uygun", "mahalle", "bul"],
+      "guidance": "PROXIMITY SITE SEARCH RECIPE (find areas satisfying multiple distance criteria):\n1. fetch_osm_boundary for the neighborhood/district (returns EPSG:4326 polygon).\n2. fetch_osm_features once per criterion inside that boundary (e.g. key='amenity' value='school'; key='highway' for roads).\n3. For road classes, filter with filter_by_attribute using field='highway' and in_values=['primary','secondary','trunk'] for main roads.\n4. reproject EVERY criterion layer to a metric CRS (EPSG:5254 for western Turkey) BEFORE buffering.\n5. buffer_metric each criterion with its distance in metres.\n6. intersect the buffers pairwise to get the area satisfying all criteria; optionally clip to the neighborhood boundary (reproject the boundary to the same metric CRS first).\n7. reproject the final layer to EPSG:4326 for display and name it clearly in outputs.\nPitfall: never buffer in EPSG:4326; never intersect layers in different CRSs."
+    },
+    {
+      "name": "metric_crs_rule",
+      "keywords": ["buffer", "metre", "meter", "distance", "area", "length", "tampon", "mesafe", "alan"],
+      "guidance": "METRIC CRS RULE: distance/area operations (buffer_metric, calculate_area) require a projected metric CRS. OSM data arrives in EPSG:4326 (degrees) - always insert reproject with target_srid='EPSG:5254' (TUREF/TM30, western Turkey) or a location-appropriate UTM zone before them. Reproject back to 'EPSG:4326' only for the final display outputs."
+    },
+    {
+      "name": "data_quality_preflight",
+      "keywords": ["quality", "validate", "check", "invalid", "topology", "kalite", "kontrol", "gecersiz", "dogrula"],
+      "guidance": "DATA QUALITY RECIPE: load_vector the file, detect_crs to report CRS facts, validate_geometry for invalid/empty/duplicate counts. Use repair_geometry only when a downstream operation requires validity. Export flagged results with save_vector or package_outputs."
+    }
+  ]
+}

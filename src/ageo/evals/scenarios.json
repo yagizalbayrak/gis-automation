@@ -1,0 +1,355 @@
+{
+  "comment": "Evaluation scenario pool for the planner/composer ladder. 'expect' is the anticipated route: registered (deterministic workflow, ready), needs_input (workflow matched, params missing -> HIL), composed (composer should build a valid plan from existing tools), gap (request needs capabilities the tool registry does not have yet - we WANT these to fail informatively). 'gaps' names the missing capabilities so results can be aggregated into a build list.",
+  "scenarios": [
+    {
+      "id": "S01", "lang": "tr", "difficulty": 2, "category": "registered",
+      "title": "Named street buffer, different city",
+      "prompt": "Eskişehir'deki \"İsmet İnönü Caddesi\" için 30 m buffer uygula",
+      "expect": "registered", "gaps": [],
+      "notes": "Deterministic path; tests place/street/distance extraction outside Kutahya."
+    },
+    {
+      "id": "S02", "lang": "tr", "difficulty": 2, "category": "registered",
+      "title": "File quality preflight",
+      "prompt": "Şu dosyaya veri kontrolü yap: /data/parseller.shp",
+      "expect": "registered", "gaps": [],
+      "notes": "preflight_quality_check via 'veri kontrolu' pattern + path extraction."
+    },
+    {
+      "id": "S03", "lang": "en", "difficulty": 2, "category": "registered",
+      "title": "CRS conversion without output dir",
+      "prompt": "Convert CRS of /data/hatlar.gpkg to EPSG:5256",
+      "expect": "needs_input", "gaps": [],
+      "notes": "crs_normalization matches; output_dir is not extractable -> HIL question."
+    },
+    {
+      "id": "S04", "lang": "tr", "difficulty": 2, "category": "registered",
+      "title": "Road fetch without buffer parameters",
+      "prompt": "Bursa'daki tüm yolları haritaya çek",
+      "expect": "needs_input", "gaps": [],
+      "notes": "road_fetch_and_buffer matched; street_name and buffer_m missing -> HIL."
+    },
+    {
+      "id": "S05", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "School proximity rental search, new city",
+      "prompt": "Eskişehir Odunpazarı'nda okullara 400 metre ve ana yollara 200 metre mesafede kiralık ev aramaya uygun bölgeleri çıkar",
+      "expect": "composed", "gaps": [],
+      "notes": "Reference multi-criteria pattern: boundary, amenity=school, highway filter, reproject, buffers, intersect."
+    },
+    {
+      "id": "S06", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "Pharmacy coverage gaps",
+      "prompt": "Kütahya merkezde eczanelerin 300 metre yürüme çevresi dışında kalan alanları göster",
+      "expect": "composed", "gaps": [],
+      "notes": "amenity=pharmacy buffer, then difference against the boundary polygon. Boundary must be reprojected to the same metric CRS before difference."
+    },
+    {
+      "id": "S07", "lang": "en", "difficulty": 3, "category": "composed",
+      "title": "Parks near main roads",
+      "prompt": "Find parks in Kutahya that lie within 400 metres of primary or secondary roads",
+      "expect": "composed", "gaps": [],
+      "notes": "leisure=park + highway in_values filter + buffer + intersect."
+    },
+    {
+      "id": "S08", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Industrial-residential conflict zones",
+      "prompt": "Kütahya'da sanayi alanlarının 500 metre etki mesafesi içinde kalan konut alanlarını tespit et",
+      "expect": "composed", "gaps": [],
+      "notes": "landuse=industrial buffer vs landuse=residential intersect; two fetches, shared metric CRS."
+    },
+    {
+      "id": "S09", "lang": "en", "difficulty": 4, "category": "composed",
+      "title": "Hospital access dead zones",
+      "prompt": "Show the parts of Kutahya that are farther than 1 kilometre from any hospital",
+      "expect": "composed", "gaps": [],
+      "notes": "amenity=hospital buffer 1000 m, difference from city polygon. Tests km->m conversion."
+    },
+    {
+      "id": "S10", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "Stream protection corridor",
+      "prompt": "Kütahya'daki akarsuların 100 metrelik koruma bandını çıkar ve ilçe sınırına göre kırp",
+      "expect": "composed", "gaps": [],
+      "notes": "waterway=* fetch, buffer, clip to boundary (boundary must be in the same CRS -> reproject)."
+    },
+    {
+      "id": "S11", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Railway noise corridor over housing",
+      "prompt": "Demiryolunun 250 metre gürültü koridorunda kalan konut bölgelerini Kütahya için haritala",
+      "expect": "composed", "gaps": [],
+      "notes": "railway=rail fetch + buffer + intersect with landuse=residential."
+    },
+    {
+      "id": "S12", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Double proximity criteria",
+      "prompt": "Kütahya Evliya Çelebi Mahallesi'nde hem camiye 300 metre hem markete 200 metre mesafede olan bölgeleri bul",
+      "expect": "composed", "gaps": [],
+      "notes": "amenity=place_of_worship and shop=supermarket buffers intersected inside neighborhood."
+    },
+    {
+      "id": "S13", "lang": "en", "difficulty": 3, "category": "composed",
+      "title": "Enrich uploaded points with landuse",
+      "prompt": "Take my subscriber points at /data/aboneler.geojson and attach the OSM landuse class each point falls in, for Kutahya",
+      "expect": "composed", "gaps": [],
+      "notes": "load_vector + fetch landuse polygons + spatial_join (CRS alignment required)."
+    },
+    {
+      "id": "S14", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "Dissolve parcels by neighborhood field",
+      "prompt": "/data/parseller.gpkg dosyasındaki parselleri mahalle_adi alanına göre birleştir ve GeoPackage olarak /out klasörüne paketle",
+      "expect": "composed", "gaps": [],
+      "notes": "load_vector + dissolve(by) + package_outputs."
+    },
+    {
+      "id": "S15", "lang": "en", "difficulty": 3, "category": "composed",
+      "title": "Repair then export",
+      "prompt": "My file /data/binalar.shp has broken geometries; repair them and export a clean GeoJSON to /out/binalar_clean.geojson",
+      "expect": "composed", "gaps": [],
+      "notes": "load_vector + repair_geometry + save_vector(GeoJSON)."
+    },
+    {
+      "id": "S16", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "Footpaths inside parks",
+      "prompt": "Kütahya'daki parkların içinden geçen yaya yollarını çıkar",
+      "expect": "composed", "gaps": [],
+      "notes": "highway=footway fetch + leisure=park fetch + clip/intersect with shared CRS."
+    },
+    {
+      "id": "S17", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Bus stop coverage gaps",
+      "prompt": "Kütahya'da otobüs duraklarının 400 metre erişim alanı dışında kalan yerleşim bölgelerini bul",
+      "expect": "composed", "gaps": [],
+      "notes": "highway=bus_stop buffer, residential landuse, difference."
+    },
+    {
+      "id": "S18", "lang": "tr", "difficulty": 5, "category": "composed",
+      "title": "Uploaded plan vs cemetery setback",
+      "prompt": "/data/imar_taslak.gpkg dosyasındaki öneri konut adalarından mezarlıkların 250 metre yakınında kalanları tespit et, Kütahya için",
+      "expect": "composed", "gaps": [],
+      "notes": "Uploaded file with unknown CRS + landuse=cemetery buffer + intersect. Stresses detect/reproject discipline on user data."
+    },
+    {
+      "id": "S19", "lang": "en", "difficulty": 5, "category": "composed",
+      "title": "Two-district comparison package",
+      "prompt": "Fetch the boundaries of Tavsanli and Simav districts in Kutahya province, get the named main roads in each, and deliver everything as one package to /out/districts",
+      "expect": "composed", "gaps": [],
+      "notes": "Two boundary fetches, two feature fetches, filter, package_outputs with layer collection. Long chain (>= 7 steps)."
+    },
+    {
+      "id": "S20", "lang": "tr", "difficulty": 3, "category": "composed",
+      "title": "Pedestrian street corridor",
+      "prompt": "Kütahya merkezdeki isimli yaya caddelerini bul ve her biri için 15 metrelik koridor oluştur",
+      "expect": "composed", "gaps": [],
+      "notes": "highway=pedestrian with require_tags name, reproject, buffer."
+    },
+    {
+      "id": "S21", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Fuel station vs school safety overlap",
+      "prompt": "Kütahya'da akaryakıt istasyonlarının 100 metre emniyet mesafesi ile okulların 100 metre çevresinin çakıştığı yerleri göster",
+      "expect": "composed", "gaps": [],
+      "notes": "amenity=fuel and amenity=school buffers intersected."
+    },
+    {
+      "id": "S22", "lang": "en", "difficulty": 3, "category": "composed",
+      "title": "Clip uploaded utility lines",
+      "prompt": "Clip my water network file /data/su_hatti.gpkg to the Yildirim Beyazit neighborhood boundary in Kutahya and package the result to /out/su",
+      "expect": "composed", "gaps": [],
+      "notes": "load + boundary fetch + CRS alignment + clip + package."
+    },
+    {
+      "id": "S23", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Residential areas far from green space",
+      "prompt": "Kütahya'da herhangi bir yeşil alana 500 metreden uzak konut bölgelerini çıkar",
+      "expect": "composed", "gaps": [],
+      "notes": "leisure=park buffer + residential landuse difference."
+    },
+    {
+      "id": "S24", "lang": "tr", "difficulty": 4, "category": "composed",
+      "title": "Solar plant siting negative screen",
+      "prompt": "Kütahya'da konut alanlarına 500 metreden uzak, ana yollara ise en fazla 300 metre mesafede güneş santrali kurulabilecek bölgeleri belirle",
+      "expect": "composed", "gaps": [],
+      "notes": "Positive criterion (road buffer intersect) + negative criterion (residential buffer difference) combined."
+    },
+    {
+      "id": "S25", "lang": "en", "difficulty": 4, "category": "composed",
+      "title": "Historic protection ring vs roads",
+      "prompt": "Which named roads in Kutahya pass within 200 metres of a historic site? Deliver them as GeoJSON to /out/historic_roads.geojson",
+      "expect": "composed", "gaps": [],
+      "notes": "historic=* buffer + named highway intersect + save_vector."
+    },
+    {
+      "id": "S26", "lang": "tr", "difficulty": 4, "category": "geodesy",
+      "title": "Degree-based buffer trap",
+      "prompt": "Kütahya'daki dereler için 0.001 derece tampon oluştur",
+      "expect": "gap", "gaps": ["degree_distance_clarification"],
+      "notes": "TRAP: distances in degrees are geodetically meaningless. Run 2 verdict: the composer REFUSES with a correct explanation (buffer_metric requires metres) - the right call. The long-term ideal is a HIL question ('0.001 deg is ~111 m at this latitude - proceed?'), tracked as the degree_distance_clarification capability."
+    },
+    {
+      "id": "S27", "lang": "en", "difficulty": 4, "category": "geodesy",
+      "title": "Explicit wrong-CRS instruction",
+      "prompt": "Buffer the streams of Kutahya by 50 metres and do all the processing in EPSG:4326 please",
+      "expect": "composed", "gaps": [],
+      "notes": "TRAP: user explicitly requests a geographic CRS for a metric operation. The validator must force a metric CRS regardless; the plan should not obey the user's CRS wish."
+    },
+    {
+      "id": "S28", "lang": "tr", "difficulty": 4, "category": "geodesy",
+      "title": "Eastern Turkey CRS zone choice",
+      "prompt": "Erzurum'daki hastanelerin 750 metre hizmet alanını çıkar",
+      "expect": "composed", "gaps": [],
+      "notes": "EPSG:5254 (TM30) is WRONG for Erzurum (~41.3E); correct is TM42/EPSG:5258 or UTM 38N. Reveals whether the composer hardcodes 5254. Validation passes either way (both metric) - review plans manually."
+    },
+    {
+      "id": "S29", "lang": "en", "difficulty": 4, "category": "geodesy",
+      "title": "Foot-based CRS suggestion",
+      "prompt": "Use the Texas Central ftUS coordinate system to buffer Kutahya schools by 300 metres",
+      "expect": "composed", "gaps": [],
+      "notes": "TRAP: EPSG:2277 is projected but foot-based; static checker classifies it non-metric and must reject any plan that buffers in it."
+    },
+    {
+      "id": "S30", "lang": "tr", "difficulty": 4, "category": "gap",
+      "title": "CSV coordinate table to points",
+      "prompt": "/data/rogar_kapaklari.csv dosyasında TM30 x ve y kolonları var; bunları nokta katmanına çevirip mahalle sınırına göre kırp",
+      "expect": "gap", "gaps": ["csv_to_point_layer"],
+      "notes": "Brief lists csv_to_point_layer; not built yet. load_vector may read CSV via pyogrio but without geometry - the CRS/coordinate-column mapping tool is missing."
+    },
+    {
+      "id": "S31", "lang": "en", "difficulty": 5, "category": "geodesy",
+      "title": "Mixed-CRS overlay discipline",
+      "prompt": "Overlay my EPSG:4326 field survey polygons at /data/arazi.geojson with Kutahya's industrial zones and report the overlapping areas as a package to /out/overlap",
+      "expect": "composed", "gaps": [],
+      "notes": "Both inputs must be brought to one metric CRS before intersect; same-CRS rule enforced by the tools."
+    },
+    {
+      "id": "S32", "lang": "tr", "difficulty": 4, "category": "geodesy",
+      "title": "Legacy datum transformation",
+      "prompt": "ED50 datumundaki /data/eski_parseller.shp dosyasını TUREF TM30'a dönüştürüp /out/parseller klasörüne paketle",
+      "expect": "composed", "gaps": [],
+      "notes": "Datum shift ED50->TUREF via pyproj; composable with load + reproject + package. Accuracy of the transformation pipeline is a later QA topic."
+    },
+    {
+      "id": "S33", "lang": "tr", "difficulty": 3, "category": "gap",
+      "title": "Area statistics per polygon",
+      "prompt": "Kütahya'daki her parkın alanını hektar cinsinden hesapla ve listele",
+      "expect": "gap", "gaps": ["calculate_area", "attribute_table_report"],
+      "notes": "calculate_area is in the brief's tool list but not built. Also needs tabular output, not just layers."
+    },
+    {
+      "id": "S34", "lang": "en", "difficulty": 3, "category": "gap",
+      "title": "Total length of a network",
+      "prompt": "How many kilometres of cycleway does Kutahya have in total?",
+      "expect": "gap", "gaps": ["calculate_length", "scalar_answer"],
+      "notes": "calculate_length missing; also the product currently returns layers, not scalar answers."
+    },
+    {
+      "id": "S35", "lang": "tr", "difficulty": 4, "category": "gap",
+      "title": "Point-in-polygon counting",
+      "prompt": "Kütahya'da her mahallede kaç adet bina olduğunu say ve mahalle bazında raporla",
+      "expect": "gap", "gaps": ["count_points_in_polygons", "admin_subdivision_fetch"],
+      "notes": "No aggregation/count tool; also needs neighborhood-level boundaries (multiple admin polygons), not a single boundary."
+    },
+    {
+      "id": "S36", "lang": "en", "difficulty": 4, "category": "gap",
+      "title": "Nearest-facility distance",
+      "prompt": "For every building in Kutahya centre, compute the distance to the nearest fire station and flag buildings farther than 2 km",
+      "expect": "gap", "gaps": ["nearest_neighbor_distance"],
+      "notes": "Needs a nearest/distance tool (sjoin_nearest). Buffer+difference can approximate the flagging but not per-feature distances."
+    },
+    {
+      "id": "S37", "lang": "tr", "difficulty": 5, "category": "gap",
+      "title": "Routing",
+      "prompt": "Kütahya tren garından Dumlupınar Üniversitesi'ne araçla en kısa güzergahı hesapla",
+      "expect": "gap", "gaps": ["routing_engine"],
+      "notes": "Network routing (pgRouting, Phase 5). No routing capability exists."
+    },
+    {
+      "id": "S38", "lang": "en", "difficulty": 5, "category": "gap",
+      "title": "Isochrone",
+      "prompt": "Draw the 10-minute walking area around Kutahya city hospital",
+      "expect": "gap", "gaps": ["isochrone"],
+      "notes": "Time-based accessibility needs a network model; crude circular buffer (~800 m) would be a misleading substitute - refusing is better than faking."
+    },
+    {
+      "id": "S39", "lang": "tr", "difficulty": 4, "category": "gap",
+      "title": "Accident density heatmap",
+      "prompt": "/data/kazalar.csv dosyasındaki trafik kazalarının yoğunluk haritasını çıkar",
+      "expect": "gap", "gaps": ["csv_to_point_layer", "kernel_density"],
+      "notes": "Needs CSV point import + density/heatmap raster or hexbin capability."
+    },
+    {
+      "id": "S40", "lang": "en", "difficulty": 5, "category": "gap",
+      "title": "DEM slope screening",
+      "prompt": "Identify areas in Kutahya with terrain slope above 20 percent that should be excluded from development",
+      "expect": "gap", "gaps": ["raster_dem", "slope_analysis"],
+      "notes": "No raster stack at all (rasterio in the brief, not yet wired)."
+    },
+    {
+      "id": "S41", "lang": "tr", "difficulty": 5, "category": "gap",
+      "title": "Zonal statistics",
+      "prompt": "/data/parseller.gpkg içindeki her parsel için ortalama arazi eğimini hesapla",
+      "expect": "gap", "gaps": ["raster_dem", "zonal_statistics"],
+      "notes": "Raster + zonal stats missing."
+    },
+    {
+      "id": "S42", "lang": "tr", "difficulty": 4, "category": "gap",
+      "title": "Address geocoding",
+      "prompt": "/data/musteri_adresleri.csv dosyasındaki adresleri koordinata çevirip harita katmanı yap",
+      "expect": "gap", "gaps": ["geocoding"],
+      "notes": "Nominatim gateway exists for boundaries only; bulk address geocoding tool is missing (and has rate-limit implications)."
+    },
+    {
+      "id": "S43", "lang": "en", "difficulty": 3, "category": "gap",
+      "title": "Centroid generation",
+      "prompt": "Create labelled centre points for every parcel in /data/parseller.gpkg and export as GeoJSON",
+      "expect": "gap", "gaps": ["centroid"],
+      "notes": "One-liner in geopandas; tool not registered yet. Cheap win."
+    },
+    {
+      "id": "S44", "lang": "en", "difficulty": 3, "category": "gap",
+      "title": "Geometry simplification",
+      "prompt": "Simplify the geometries in /data/mahalleler.gpkg with 5 metre tolerance for web display and save as GeoJSON",
+      "expect": "gap", "gaps": ["simplify_geometry"],
+      "notes": "Douglas-Peucker via shapely; tool missing. Note: tolerance implies metric CRS - good geodesy test when built."
+    },
+    {
+      "id": "S45", "lang": "tr", "difficulty": 5, "category": "gap",
+      "title": "Voronoi service areas",
+      "prompt": "Kütahya'daki aile sağlığı merkezlerinin Voronoi hizmet bölgelerini oluştur",
+      "expect": "gap", "gaps": ["voronoi"],
+      "notes": "shapely voronoi_diagram exists; tool not registered."
+    },
+    {
+      "id": "S46", "lang": "en", "difficulty": 4, "category": "gap",
+      "title": "Hex-grid density",
+      "prompt": "Build a 500 m hexagon grid over Kutahya and colour it by the number of shops in each cell",
+      "expect": "gap", "gaps": ["grid_generation", "count_points_in_polygons"],
+      "notes": "Grid generation + aggregation both missing."
+    },
+    {
+      "id": "S47", "lang": "tr", "difficulty": 5, "category": "composed",
+      "title": "Multi-ring impact zones",
+      "prompt": "Kütahya şeker fabrikası çevresinde 100, 300 ve 500 metrelik etki halkaları oluştur ve her halkada kalan konut alanlarını ayrı katmanlar olarak paketle",
+      "expect": "composed", "gaps": [],
+      "notes": "STRETCH: possible with buffers + difference (ring = larger minus smaller) + intersects + package, but the chain is long (~12 steps). Tests composer at the MAX_STEPS boundary."
+    },
+    {
+      "id": "S48", "lang": "tr", "difficulty": 4, "category": "gap",
+      "title": "Folder-wide merge",
+      "prompt": "/data/ilceler/ klasöründeki bütün shapefile'ları tek bir GeoPackage'ta birleştir",
+      "expect": "gap", "gaps": ["merge_layers", "batch_folder_processing"],
+      "notes": "Phase 3 batch processing + a merge/append tool are both missing."
+    },
+    {
+      "id": "S49", "lang": "tr", "difficulty": 3, "category": "gap",
+      "title": "DXF delivery for CAD",
+      "prompt": "Kütahya'daki ana yolları Netcad'de açabileceğim şekilde DXF olarak /out/yollar.dxf dosyasına ver",
+      "expect": "gap", "gaps": ["dxf_export"],
+      "notes": "Brief requires DXF output; save_vector currently supports GPKG/GeoJSON/Shapefile only."
+    },
+    {
+      "id": "S50", "lang": "en", "difficulty": 3, "category": "gap",
+      "title": "KML delivery for Google Earth",
+      "prompt": "Export Kutahya's parks as a KML file I can open in Google Earth, to /out/parklar.kml",
+      "expect": "gap", "gaps": ["kml_export"],
+      "notes": "KML is in the brief's output format list; not wired into save_vector yet."
+    }
+  ]
+}

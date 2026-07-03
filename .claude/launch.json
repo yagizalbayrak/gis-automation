@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ageo",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "ageo.interface.api.serve"],
+      "port": 8000,
+      "autoPort": true
+    },
+    {
+      "name": "ageo-demo",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "python", "-m", "ageo.interface.api.serve", "--demo"],
+      "port": 8000,
+      "autoPort": true
+    }
+  ]
+}

@@ -5,7 +5,7 @@
 > "Milestone log" and refresh "Current state" + "Next steps" before ending
 > the session. Rules and architecture live in [AGENTS.md](AGENTS.md) - do
 > not duplicate them here; this file records STATE and HISTORY.
-> Last updated: 2026-07-03 by Codex.
+> Last updated: 2026-07-04 by Claude Code.
 
 ## Current state (the short version)
 
@@ -14,7 +14,10 @@
 - **Tests**: 97/97 green, all offline (`uv run pytest`, ~2 s).
 - **Runs**: `uv run python -m ageo.interface.api.serve` (real OSM) or
   `--demo` (offline synthetic Kutahya). Web UI at `/` on :8000
-  (respects `PORT`). Preview configs in `.claude/launch.json`.
+  (respects `PORT`; bind host via `AGEO_HOST`, default 127.0.0.1).
+  Preview configs in `.claude/launch.json`. Docker: `docker compose up
+  --build ageo` (:8000) or `--profile demo up ageo-demo` (:8001) for
+  colleagues cloning the repo.
 - **LLM**: user's own **Gemini 2.5 Flash** key, configured via the UI
   Settings panel, stored at `~/.ageo/llm_settings.json` (owner-only,
   masked in API). Adapters read live config per call. A local `.env`
@@ -88,6 +91,14 @@ Reporter. Full map in AGENTS.md section 3.
    compact table and total outputs, API `results` for non-layer outputs,
    demo OSM parks/cycleways for offline S33/S34-shaped execution coverage
    (97 tests).
+10. **Local Docker packaging** - multi-stage uv Dockerfile (non-root
+    `ageo` user, pre-owned `~/.ageo` for the settings volume),
+    docker-compose.yml with `ageo` (real OSM, :8000) + `ageo-demo`
+    (profile `demo`, :8001) services, `.dockerignore`; serve.py gained
+    `AGEO_HOST` env support (container binds 0.0.0.0, local default
+    unchanged). Verified: image builds, demo container serves /catalog
+    and the UI, settings volume writable as non-root, compose config
+    valid (97 tests).
 
 ## Key decisions (and why)
 

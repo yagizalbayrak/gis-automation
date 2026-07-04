@@ -108,6 +108,18 @@ AGEO_COMPOSER_MODEL=gemini/gemini-2.5-flash
 Saved UI settings in `~/.ageo/llm_settings.json` take precedence over `.env`.
 If the UI has an old key saved, update it in Settings or remove that JSON file.
 
+### Docker
+
+```bash
+docker compose up --build ageo                 # real OSM on :8000
+docker compose --profile demo up ageo-demo     # offline demo on :8001
+```
+
+The `ageo` service reads `.env` from the project root if present (same keys
+as above). LLM settings saved via the UI persist in the `ageo-settings`
+volume. `.env` is never baked into the image. Inside a container the server
+binds `AGEO_HOST=0.0.0.0`; outside Docker the default stays `127.0.0.1`.
+
 Open http://127.0.0.1:8000/ and try the example chips, e.g.:
 `Kutahya'daki "Ataturk Caddesi" icin 25 m buffer uygula`
 or the composed multi-criteria scenario:
@@ -117,4 +129,5 @@ mesafede kiralik ev icin uygun alanlari bul`
 ## Not yet built (by design order)
 
 Vector-store RAG (pgvector) behind the RecipeStore interface, PostGIS
-workspace, Docker packaging and sandbox, batch folder processing (Phase 3).
+workspace, sandbox story for any future generated-code path, batch folder
+processing (Phase 3). Local Docker packaging (Dockerfile + compose) is done.

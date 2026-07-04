@@ -145,6 +145,13 @@ uv run python -m ageo.interface.api.serve           # real OSM gateway, :8000
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
 ```
 
+Docker (for colleagues without a local uv setup): `docker compose up
+--build ageo` (real OSM, :8000) or `docker compose --profile demo up
+ageo-demo` (offline, :8001). The container sets `AGEO_HOST=0.0.0.0`
+(serve.py binds `127.0.0.1` by default outside Docker); `.env` is read at
+runtime via compose, never baked into the image; UI-saved LLM settings
+persist in the `ageo-settings` volume mounted at `/home/ageo/.ageo`.
+
 Web UI at `/`. `.claude/launch.json` defines `ageo` (real) and `ageo-demo`
 preview configs (autoPort; server respects `PORT`).
 
@@ -254,7 +261,8 @@ must flip from composed_refused to composed_ok.
    stays).
 6. **PostGIS workspace** implementing `ToolContext` (the seam is
    `infrastructure/gis/workspace.py`).
-7. **Docker packaging** + sandbox story for any future generated-code path.
+7. **Sandbox story** for any future generated-code path (local Docker
+   packaging is done: Dockerfile + docker-compose.yml, see section 4).
 
 ## 9. Definition of done for any change
 

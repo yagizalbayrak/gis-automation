@@ -34,7 +34,7 @@ def main() -> None:
         composer_llm = DemoComposerLlm()
     uvicorn.run(
         create_app(osm_gateway=gateway, composer_llm=composer_llm),
-        host="127.0.0.1",
+        host=os.environ.get("AGEO_HOST", "127.0.0.1"),
         port=args.port,
     )
 

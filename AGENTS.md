@@ -11,9 +11,53 @@ Companion documents - each has ONE job, keep them consistent:
   reading it.
 - **[PROJECT_BRIEF_FABLE5.md](PROJECT_BRIEF_FABLE5.md)** - product brief,
   source of truth for scope.
+- **[ADAPTIVE_EXECUTION_STATUS.md](ADAPTIVE_EXECUTION_STATUS.md)** - maps
+  the Adaptive Execution & Dynamic Calibration blueprint (User Calibration
+  + Clarification Engine pillars) to what is actually built vs. still
+  planned. Read this before assuming any part of that blueprint exists.
 - **[README.md](README.md)** - user-facing feature status.
 - **[CLAUDE.md](CLAUDE.md)** - Claude Code entry point (points back here;
   rules live in THIS file only).
+
+### How to write HANDOFF.md updates (style guide for any model)
+
+Follow this template exactly so entries stay scannable and consistent
+across Claude and Codex sessions - do not freelance a different format.
+
+- **Milestone log entry**: append, never rewrite history. One line:
+  `N. **Short Title** - what was built (key files/components, one
+  notable technical decision if any) (X tests).` Keep it to 3-6 lines
+  max; link out to AGENTS.md section 3 or a results file instead of
+  duplicating detail. Always end with the current total test count in
+  parentheses, even if unchanged.
+- **"Current state" bullets**: `- **Label**: fact, fact, fact.` Bold
+  label is a noun phrase (LLM, Tests, Runs...), not a sentence. Quote
+  file paths, env vars and endpoint names with backticks. Update the
+  `Tests: X/X green` line and the `Last updated:` line at the top of the
+  file every session, even a small one.
+- **"Next steps" entries**: `N. **Phase name**: what to do, why it
+  matters or what it depends on, any caveat (approval needed, contract
+  risk, etc).` Order = agreed priority, most urgent first. When you
+  finish a step, delete it from this list (the milestone log is the
+  history; this list is only the todo).
+- **"Key decisions" / "Critical bugs"**: one bullet each, single
+  sentence, imperative or factual - `X -> Y` or `X because Y`. Only add
+  an entry if it would surprise a future session or cost real time to
+  re-derive; do not log routine implementation choices here.
+- **Scope discipline**: if a change is intentionally partial (an
+  increment of a larger design), say so explicitly in the milestone
+  entry AND add the deferred part to "Next steps" with a one-line reason
+  it was deferred (e.g. "touches the API contract, needs its own
+  review"). Future sessions must never have to guess what was left out.
+- **AGENTS.md vs HANDOFF.md**: architecture/component descriptions
+  (section 3's file map, the API surface paragraph) go in AGENTS.md and
+  must be kept literally accurate (paths, function names) - update them
+  in the same edit as the HANDOFF.md milestone, not later. HANDOFF.md
+  never duplicates architecture, only state/history/decisions/next-steps.
+- **README.md**: update the relevant feature-status bullet in the same
+  session a feature lands (AGENTS.md section 9 "Definition of done").
+  Note explicitly what is NOT done yet (e.g. "no UI tab") rather than
+  implying completeness.
 
 ## 1. What this product is
 
@@ -57,7 +101,7 @@ fast path, composition is the universal fallback.
    no pyproj, no geopandas imports there.
 6. **All code, comments, docstrings, identifiers in English.** UI copy and
    NL matching support Turkish + English.
-7. **Tests run offline.** All 97 tests mock LLMs (litellm) and OSM (demo
+7. **Tests run offline.** All 142 tests mock LLMs (litellm) and OSM (demo
    gateway). Never add a test that spends tokens or hits the network.
    `uv run pytest` must stay green.
 8. **Turkish text folding matters.** Real OSM says "Atatürk Bulvarı"; users
@@ -73,6 +117,10 @@ src/ageo/
   domain/                    # pure Python invariants
     value_objects/crs.py         CrsDescriptor, CrsKind
     value_objects/requirements.py InputRequirement, check_crs()  <- THE geodetic gate
+    value_objects/user_profile.py UserProfile: role/gis_level/crs_awareness/
+                                 autonomy_preference/explanation_depth/language;
+                                 to_prompt_line() (compact LLM injection),
+                                 report_depth() (Reporter depth mapping)
     ports/crs_info.py            CrsInfoPort protocol
   application/
     tools/contract.py            StrictModel, LayerRef, ToolSpec, Tool, ToolContext,
@@ -99,9 +147,17 @@ src/ageo/
                                  HybridPlanner (sanitizes LLM decisions: hallucinated
                                  workflows rejected, unknown params dropped,
                                  missing_params recomputed from registry)
+    agents/clarifier.py          build_questions(): structured HIL questions
+                                 (PendingQuestion) + Assumption ledger, gated by
+                                 UserProfile.autonomy_preference; deterministic
+                                 TR/EN templates, zero tokens
     agents/composer.py           PlanComposer: compose -> normalize -> validate ->
-                                 one feedback retry -> ComposerError; MAX_STEPS=15
-    agents/reporter.py           ProcessReporter: deterministic EN/TR reports from trace
+                                 one feedback retry -> ComposerError; MAX_STEPS=15;
+                                 may also raise ComposerClarificationRequired (a
+                                 PendingQuestion, capped at one round per task) for
+                                 genuinely ambiguous novel requests
+    agents/reporter.py           ProcessReporter: deterministic EN/TR reports from
+                                 trace; depth param (plain|steps|audit) gates detail
     rag/store.py + bundled_recipes.json  RAG-lite keyword recipes (lazy; pgvector can
                                  implement the same search() later)
   infrastructure/
@@ -114,6 +170,9 @@ src/ageo/
     llm/litellm_planner.py       the planner LLM call site
     llm/litellm_composer.py      the composer LLM call site (system prompt with plan
                                  JSON schema + hard geodetic rules)
+    user/profile_store.py        UserProfileStore -> ~/.ageo/user_profile.json
+                                 (single-tenant, no secret, no chmod); live
+                                 per-call resolution like LlmConfigStore
   interface/
     api/app.py                   FastAPI factory create_app(); all endpoints
     api/tasks.py                 TaskManager: plan -> compose fallback -> background
@@ -121,7 +180,7 @@ src/ageo/
     api/schemas.py               API request/response models
     api/serve.py                 dev server; --demo flag; PORT env respected
     web/static/                  index.html / app.js / style.css (vanilla JS, MapLibre)
-tests/                           97 tests, all offline; conftest has fixtures + FakeOsmGateway
+tests/                           142 tests, all offline; conftest has fixtures + FakeOsmGateway
 ```
 
 **Escalation ladder for a request:** DeterministicPlanner (registered
@@ -131,16 +190,38 @@ funnel into the same guarded runner.
 
 **API surface:** `POST /tasks?wait=` (statuses: running/succeeded/failed/
 needs_input+missing_params/unmatched; composed tasks carry `mode` and
-`plan`), `GET /tasks/{id}`, `/trace`, `/events` (SSE), `/report?lang=en|tr`,
-`/layers/{output}` (always served in EPSG:4326 display CRS; analytical CRS
-preserved in workspace), `POST /uploads`, `GET /catalog`,
-`GET|PUT /settings/llm`, `POST /settings/llm/test`.
+`plan`; responses also carry structured `questions` - clarifier
+PendingQuestion objects with severity/TR+EN text/options/defaults - and
+an `assumptions` ledger of params that fell back to spec defaults),
+`GET /tasks/{id}`, `/trace`, `/events` (SSE),
+`/report?lang=en|tr&depth=plain|steps|audit` (both default from the saved
+user profile when omitted, else the long-standing `en`/full-detail
+default; the Assumptions section renders at EVERY depth),
+`/layers/{output}` (always served in EPSG:4326 display CRS;
+analytical CRS preserved in workspace), `POST /uploads`, `GET /catalog`,
+`GET|PUT /settings/llm`, `POST /settings/llm/test`,
+`GET|PUT /settings/profile` (role/gis_level/crs_awareness/
+autonomy_preference/explanation_depth/language; full-replace, no UI tab
+yet). The saved profile is injected as a compact one-line string into
+the planner's and composer's LLM prompts (`UserProfile.to_prompt_line()`,
+~20 tokens) AND gates the clarifier: strict_confirm turns spec defaults
+into blocking confirmation questions; guided/autonomous ledger them
+(identical for registered workflows - guided and autonomous only diverge
+for composer-originated clarifications, where autonomous auto-resolves
+if the composer supplied a recommended option). Autonomy never invents
+values: required params without defaults are asked under every profile,
+and autonomous never auto-resolves a composer clarification without a
+recommended option to fall back on. The composer itself may also raise a
+`ComposerClarificationRequired` (`ComposerError`'s sibling third outcome,
+not a subclass) for genuinely ambiguous novel requests - same
+`questions`/`assumptions` response shape, same UI rendering, no separate
+API surface.
 
 ## 4. How to run
 
 ```bash
 uv sync                                      # install (uv-managed venv)
-uv run pytest                                # 97 tests, offline, ~2s
+uv run pytest                                # 142 tests, offline, ~2s
 uv run python -m ageo.interface.api.serve           # real OSM gateway, :8000
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
 ```
@@ -169,7 +250,18 @@ Studio key as `GEMINI_API_KEY=...`. Saved UI settings take precedence over
 
 See HANDOFF.md for the authoritative, session-updated state. Snapshot:
 
-- 97/97 tests green; zero browser console errors in verification runs.
+- 142/142 tests green; zero browser console errors in verification runs.
+- `UserProfile` increment 1 verified live against the `--demo` server:
+  `GET/PUT /settings/profile` roundtrips, and `/report` picks up the
+  saved profile's language/depth by default while an unconfigured
+  profile still reports exactly as before (no regression). See HANDOFF.md
+  milestone 11 for the full component list.
+- Clarification Engine (increment 2) browser-verified in demo mode:
+  guided profile ledgers `target_srid=EPSG:5254` (assumptions card + a
+  report section at every depth, EN/TR); strict_confirm turns the same
+  default into a prefilled confirmation question with a recommended
+  hint; the classic HIL flow round-trips with structured questions.
+  See HANDOFF.md milestone 12.
 - Tier-1 `calculate_area` and `calculate_length` are registered and
   offline-tested: they require projected metric polygon/line layers, support
   m2/ha and m/km, and return measured layers plus compact table/total

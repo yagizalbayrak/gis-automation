@@ -135,7 +135,10 @@ class DemoComposerLlm:
     proximity scenario with the reference plan, refuses anything else the
     way a disabled composer would."""
 
-    def compose(self, text, tool_catalog, recipes, feedback) -> dict:
+    def compose(
+        self, text, tool_catalog, recipes, feedback, *, profile=None,
+        clarification_answer=None,
+    ) -> dict:
         folded = text.lower()
         if any(keyword in folded for keyword in _SCENARIO_KEYWORDS):
             return RENTAL_SITE_SEARCH_PLAN

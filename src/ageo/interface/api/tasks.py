@@ -12,7 +12,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from ageo.application.agents.composer import PlanComposer, plan_preview
+from ageo.application.agents.clarifier import Assumption, PendingQuestion, build_questions
+from ageo.application.agents.composer import (
+    ComposerClarificationRequired,
+    PlanComposer,
+    plan_preview,
+)
 from ageo.application.agents.planner import DeterministicPlanner, HybridPlanner
 from ageo.application.orchestration.runner import WorkflowRunner
 from ageo.application.orchestration.trace import ListTraceSink
@@ -22,7 +27,9 @@ from ageo.application.tools.registry import ToolRegistry
 from ageo.application.workflows.registry import WorkflowRegistry
 from ageo.application.workflows.spec import WorkflowSpec
 from ageo.domain.ports.crs_info import CrsInfoPort
+from ageo.domain.value_objects.user_profile import AutonomyPreference, UserProfile
 from ageo.infrastructure.gis.workspace import InMemoryWorkspace
+from ageo.infrastructure.user.profile_store import UserProfileStore
 from ageo.interface.api.schemas import TaskResponse, TaskStatus
 
 TERMINAL_STATUSES = frozenset(
@@ -40,6 +47,8 @@ class TaskRecord:
     spec: WorkflowSpec | None = None  # set for composed plans
     params: dict[str, Any] = field(default_factory=dict)
     missing_params: list[str] = field(default_factory=list)
+    questions: list[PendingQuestion] = field(default_factory=list)
+    assumptions: list[Assumption] = field(default_factory=list)
     explanation: str = ""
     outputs: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
@@ -57,6 +66,8 @@ class TaskRecord:
             plan=plan_preview(self.spec) if self.spec else [],
             params={k: v for k, v in self.params.items() if v is not None},
             missing_params=self.missing_params,
+            questions=[q.model_dump(mode="json") for q in self.questions],
+            assumptions=[a.model_dump(mode="json") for a in self.assumptions],
             explanation=self.explanation,
             outputs={
                 name: value.layer_id
@@ -81,6 +92,7 @@ class TaskManager:
         osm_gateway: OsmGateway | None,
         planner: DeterministicPlanner | HybridPlanner | None = None,
         composer: PlanComposer | None = None,
+        user_profile: UserProfileStore | None = None,
     ) -> None:
         self._tools = tools
         self._workflows = workflows
@@ -88,6 +100,7 @@ class TaskManager:
         self._osm_gateway = osm_gateway
         self._planner = planner or DeterministicPlanner(workflows)
         self._composer = composer
+        self._user_profile = user_profile or UserProfileStore()
         self._records: dict[str, TaskRecord] = {}
         self._lock = threading.Lock()
 
@@ -100,7 +113,8 @@ class TaskManager:
         with self._lock:
             self._records[record.task_id] = record
 
-        decision = self._planner.plan(text)
+        profile: UserProfile = self._user_profile.get_or_default()
+        decision = self._planner.plan(text, profile=profile)
         record.workflow = decision.workflow
         record.explanation = decision.explanation
         # Explicit user parameters always win over heuristic extraction:
@@ -112,16 +126,16 @@ class TaskManager:
             # which builds a new tool chain and must pass the same validator
             # bundled workflows pass.
             if self._composer is not None:
-                return self._submit_composed(record, wait)
+                return self._submit_composed(record, wait, profile)
             record.status = TaskStatus.UNMATCHED
             return record
 
         spec = self._workflows.get(decision.workflow)
-        record.missing_params = [
-            p.name
-            for p in spec.params
-            if p.required and p.default is None and p.name not in record.params
-        ]
+        questions, assumptions = build_questions(spec, record.params, profile)
+        record.questions = questions
+        record.assumptions = assumptions
+        # Backward-compat view: the params a human must still supply.
+        record.missing_params = [q.param for q in questions if q.blocking]
         if record.missing_params:
             record.status = TaskStatus.NEEDS_INPUT
             return record
@@ -138,9 +152,55 @@ class TaskManager:
         with self._lock:
             return self._records.get(task_id)
 
-    def _submit_composed(self, record: TaskRecord, wait: bool) -> TaskRecord:
+    def _submit_composed(
+        self, record: TaskRecord, wait: bool, profile: UserProfile
+    ) -> TaskRecord:
+        clarification_answer = record.params.get("clarification_answer")
+        record.params = {}  # composed plans still carry no formal params otherwise
+
         try:
-            composed = self._composer.compose(record.text)
+            composed = self._composer.compose(
+                record.text, profile=profile, clarification_answer=clarification_answer
+            )
+        except ComposerClarificationRequired as exc:
+            question = exc.question
+            recommended = next((o for o in question.options if o.recommended), None)
+            if (
+                profile.autonomy_preference is AutonomyPreference.AUTONOMOUS
+                and recommended is not None
+            ):
+                # Autonomy still never invents an answer without a
+                # recommended option to fall back on - only auto-resolve
+                # when the composer itself supplied one.
+                try:
+                    composed = self._composer.compose(
+                        record.text,
+                        profile=profile,
+                        clarification_answer=str(recommended.value),
+                    )
+                except (ComposerClarificationRequired, AgeoError) as exc2:
+                    record.status = TaskStatus.UNMATCHED
+                    record.explanation = (
+                        "No registered workflow matched and the plan composer "
+                        "could not build a valid plan."
+                    )
+                    record.error = str(exc2)
+                    return record
+                record.assumptions = [
+                    Assumption(
+                        param="clarification_answer",
+                        value=recommended.value,
+                        source="composer_recommended",
+                        reason=question.reason,
+                        text=question.text,
+                    )
+                ]
+            else:
+                record.mode = "composed"
+                record.questions = [question]
+                record.missing_params = ["clarification_answer"]
+                record.status = TaskStatus.NEEDS_INPUT
+                return record
         except AgeoError as exc:
             record.status = TaskStatus.UNMATCHED
             record.explanation = (

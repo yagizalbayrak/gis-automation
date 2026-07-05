@@ -42,6 +42,14 @@ class TaskResponse(BaseModel):
     )
     params: dict[str, Any] = Field(default_factory=dict)
     missing_params: list[str] = Field(default_factory=list)
+    questions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured HIL questions (clarifier.PendingQuestion, JSON-dumped)",
+    )
+    assumptions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Assumption ledger: params that fell back to spec defaults",
+    )
     explanation: str = ""
     outputs: dict[str, str] = Field(
         default_factory=dict, description="Output name -> workspace layer id"
@@ -84,6 +92,37 @@ class LlmTestResponse(BaseModel):
     model: str | None = None
     latency_ms: int | None = None
     message: str
+
+
+class UserProfileUpdate(BaseModel):
+    """Full-replace, not partial like LlmSettingsUpdate: no field here is a
+    secret, so there is no "keep the previous value" case - the Settings
+    UI always GETs the current profile before it PUTs a new one."""
+
+    model_config = {"extra": "forbid"}
+
+    role: str = Field(
+        pattern=r"^(gis_specialist|civil_engineer|urban_planner|"
+        r"municipality_staff|non_technical_user)$"
+    )
+    gis_level: str = Field(pattern=r"^(beginner|intermediate|advanced)$")
+    crs_awareness: str = Field(pattern=r"^(high|low)$")
+    autonomy_preference: str = Field(
+        pattern=r"^(guided|autonomous|strict_confirm)$"
+    )
+    explanation_depth: str = Field(
+        pattern=r"^(plain_language|step_by_step|technical_audit)$"
+    )
+    language: str = Field(pattern=r"^(tr|en)$")
+
+
+class UserProfileResponse(BaseModel):
+    role: str
+    gis_level: str
+    crs_awareness: str
+    autonomy_preference: str
+    explanation_depth: str
+    language: str
 
 
 class LayerResponse(BaseModel):

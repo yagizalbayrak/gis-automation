@@ -21,6 +21,7 @@ def client(tmp_path) -> TestClient:
         osm_gateway=FakeOsmGateway(),
         upload_dir=str(tmp_path / "uploads"),
         settings_path=str(tmp_path / "llm_settings.json"),
+        profile_path=str(tmp_path / "user_profile.json"),
     )
     return TestClient(app)
 

@@ -25,12 +25,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ageo.application.agents.clarifier import PendingQuestion, QuestionOption
 from ageo.application.rag.store import RecipeStore
 from ageo.application.tools.errors import ComposerError, WorkflowRegistrationError
 from ageo.application.tools.registry import ToolRegistry
 from ageo.application.workflows.spec import WorkflowSpec
 from ageo.application.workflows.validation import validate_workflow
 from ageo.domain.ports.crs_info import CrsInfoPort
+from ageo.domain.value_objects.user_profile import UserProfile
 
 MAX_STEPS = 15
 _NAME_OK = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -40,7 +42,9 @@ class LlmComposerPort(Protocol):
     """Seam for the composition model call (LiteLLM adapter in
     infrastructure, scripted fakes in tests/demo). Receives the user text,
     the tool catalog and recipe guidance; returns the parsed plan dict.
-    `feedback` carries the validator's error message on the retry pass."""
+    `feedback` carries the validator's error message on the retry pass.
+    `clarification_answer` carries the user's answer to a prior
+    ComposerClarificationRequired, when one was asked."""
 
     def compose(
         self,
@@ -48,6 +52,9 @@ class LlmComposerPort(Protocol):
         tool_catalog: list[dict],
         recipes: list[str],
         feedback: str | None,
+        *,
+        profile: UserProfile | None = None,
+        clarification_answer: str | None = None,
     ) -> dict: ...
 
 
@@ -56,6 +63,17 @@ class ComposedPlan:
     spec: WorkflowSpec
     attempts: int
     recipes_used: int
+
+
+class ComposerClarificationRequired(Exception):
+    """The composer needs a human answer before it can produce a plan or an
+    honest refusal - a genuine third outcome, not a failure. Deliberately
+    NOT an AgeoError subclass: existing `except AgeoError` call sites
+    (TaskManager, the eval harness) must never silently swallow it."""
+
+    def __init__(self, question: PendingQuestion) -> None:
+        self.question = question
+        super().__init__(question.reason)
 
 
 class PlanComposer:
@@ -73,13 +91,38 @@ class PlanComposer:
         self._recipes = recipes or RecipeStore()
         self._max_attempts = max_attempts
 
-    def compose(self, text: str) -> ComposedPlan:
+    def compose(
+        self,
+        text: str,
+        *,
+        profile: UserProfile | None = None,
+        clarification_answer: str | None = None,
+    ) -> ComposedPlan:
         recipe_texts = self._recipes.search(text, k=2)
         catalog = self._tools.catalog()
         feedback: str | None = None
+        # Whether the CALLER already supplied an answer to a prior
+        # clarification - not whether one was raised on a previous retry
+        # attempt within this same invocation. Caps clarification at one
+        # round per task: a second ask despite an answer becomes an honest
+        # refusal instead of looping forever.
+        answer_supplied = clarification_answer is not None
 
         for attempt in range(1, self._max_attempts + 1):
-            payload = self._llm.compose(text, catalog, recipe_texts, feedback)
+            payload = self._llm.compose(
+                text,
+                catalog,
+                recipe_texts,
+                feedback,
+                profile=profile,
+                clarification_answer=clarification_answer,
+            )
+            clarification = self._parse_clarification(payload)
+            if clarification is not None:
+                if answer_supplied:
+                    raise ComposerError(f"plan_refused: {clarification.reason}")
+                raise ComposerClarificationRequired(clarification)
+
             spec = self._parse(payload)
             try:
                 validate_workflow(spec, self._tools, self._crs_info)
@@ -93,6 +136,65 @@ class PlanComposer:
         raise ComposerError(
             f"Could not compose a valid plan after {self._max_attempts} attempts. "
             f"Last validation error: {feedback}"
+        )
+
+    def _parse_clarification(self, payload: dict) -> PendingQuestion | None:
+        """Detect and defensively sanitize the clarification wire shape.
+        Must run BEFORE _parse()'s empty-steps refusal check: a
+        clarification payload has no "steps" key at all. Untrusted model
+        output - never raise a raw KeyError/TypeError, never leave en/tr
+        text empty, mirroring _to_decision() in litellm_planner.py."""
+        if not isinstance(payload, dict):
+            return None
+        raw = payload.get("clarification")
+        if not isinstance(raw, dict):
+            return None
+
+        reason = str(raw.get("reason", "")).strip() or "the request is ambiguous"
+
+        raw_question = raw.get("question")
+        if not isinstance(raw_question, dict):
+            raw_question = {}
+        text = {
+            "en": str(raw_question.get("en", "")).strip()
+            or "Please clarify your request.",
+            "tr": str(raw_question.get("tr", "")).strip()
+            or "Lutfen isteginizi netlestirin.",
+        }
+
+        raw_options = raw.get("options")
+        if not isinstance(raw_options, list):
+            raw_options = []
+        options: list[QuestionOption] = []
+        for raw_option in raw_options:
+            if not isinstance(raw_option, dict) or "value" not in raw_option:
+                continue
+            raw_label = raw_option.get("label")
+            if not isinstance(raw_label, dict):
+                raw_label = {}
+            label = {
+                "en": str(raw_label.get("en", "")).strip() or str(raw_option["value"]),
+                "tr": str(raw_label.get("tr", "")).strip() or str(raw_option["value"]),
+            }
+            recommended = raw_option.get("recommended")
+            if not isinstance(recommended, bool):
+                recommended = False
+            options.append(
+                QuestionOption(
+                    value=raw_option["value"], label=label, recommended=recommended
+                )
+            )
+
+        return PendingQuestion(
+            question_id="q_composer_clarification",
+            question_type="clarification",
+            severity="material",
+            param="clarification_answer",
+            kind="string",
+            reason=reason,
+            text=text,
+            options=tuple(options),
+            blocking=True,
         )
 
     def _parse(self, payload: dict) -> WorkflowSpec:

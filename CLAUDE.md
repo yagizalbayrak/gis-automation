@@ -19,7 +19,7 @@ Read these two files before doing anything:
 - End of any significant milestone: update HANDOFF.md (milestone log,
   current state, next steps) so the next session - either model - can
   resume seamlessly. Update README.md feature status too.
-- `uv run pytest` must be green before and after your work (85 tests,
+- `uv run pytest` must be green before and after your work (142 tests,
   offline, ~2 s). Never add tests that hit the network or spend tokens.
 - UI-visible changes: verify in the browser (preview config `ageo` =
   real OSM, `ageo-demo` = offline) and check the console for errors.

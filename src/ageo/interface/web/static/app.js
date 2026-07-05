@@ -309,6 +309,7 @@ function renderTask(task) {
   if (task.explanation) addKv(body, "planner", task.explanation);
   understood.classList.remove("hidden");
 
+  renderAssumptions(task);
   if (task.status === "needs_input") renderQuestions(task);
   if (task.status === "failed" && task.error) {
     el("error-body").textContent = task.error;
@@ -345,22 +346,12 @@ function addKv(parent, key, value) {
 }
 
 async function renderQuestions(task) {
-  if (!state.catalog) {
-    state.catalog = await (await fetch("/catalog")).json();
-  }
-  const workflow = state.catalog.workflows.find((w) => w.name === task.workflow);
   const form = el("questions-form");
   form.innerHTML = "";
-  for (const name of task.missing_params) {
-    const meta = workflow?.params.find((p) => p.name === name);
-    const label = document.createElement("label");
-    label.textContent = `${name} - ${meta?.description || meta?.kind || ""}`;
-    const input = document.createElement("input");
-    input.name = name;
-    input.dataset.kind = meta?.kind || "string";
-    input.placeholder = meta?.kind === "float" ? "e.g. 25" : "";
-    form.appendChild(label);
-    form.appendChild(input);
+  if (task.questions && task.questions.length) {
+    renderStructuredQuestions(task.questions, form);
+  } else {
+    await renderCatalogQuestions(task, form);
   }
   el("questions").classList.remove("hidden");
   el("answer-btn").onclick = () => {
@@ -375,6 +366,66 @@ async function renderQuestions(task) {
     el("questions").classList.add("hidden");
     submitTask(params);
   };
+}
+
+function renderStructuredQuestions(questions, form) {
+  for (const q of questions) {
+    const label = document.createElement("label");
+    label.textContent = q.text[state.reportLang] || q.text.en;
+    const recommended = (q.options || []).find((o) => o.recommended);
+    if (recommended) {
+      const hint = document.createElement("span");
+      hint.className = "q-hint";
+      hint.textContent = ` (recommended: ${recommended.value})`;
+      label.appendChild(hint);
+    }
+    const input = document.createElement("input");
+    input.name = q.param;
+    input.dataset.kind = q.kind || "string";
+    input.placeholder = q.kind === "float" ? "e.g. 25" : "";
+    // Prefill the default so answering a strict_confirm question carries
+    // the value explicitly - an empty resubmit would loop back here.
+    if (q.default_if_skipped !== null && q.default_if_skipped !== undefined) {
+      input.value = String(q.default_if_skipped);
+    }
+    form.appendChild(label);
+    form.appendChild(input);
+  }
+}
+
+async function renderCatalogQuestions(task, form) {
+  if (!state.catalog) {
+    state.catalog = await (await fetch("/catalog")).json();
+  }
+  const workflow = state.catalog.workflows.find((w) => w.name === task.workflow);
+  for (const name of task.missing_params) {
+    const meta = workflow?.params.find((p) => p.name === name);
+    const label = document.createElement("label");
+    label.textContent = `${name} - ${meta?.description || meta?.kind || ""}`;
+    const input = document.createElement("input");
+    input.name = name;
+    input.dataset.kind = meta?.kind || "string";
+    input.placeholder = meta?.kind === "float" ? "e.g. 25" : "";
+    form.appendChild(label);
+    form.appendChild(input);
+  }
+}
+
+function renderAssumptions(task) {
+  const list = el("assumptions-list");
+  list.innerHTML = "";
+  if (!task.assumptions || !task.assumptions.length) {
+    el("assumptions-box").classList.add("hidden");
+    return;
+  }
+  for (const assumption of task.assumptions) {
+    const item = document.createElement("li");
+    item.textContent =
+      (assumption.text && (assumption.text[state.reportLang] || assumption.text.en)) ||
+      `Assumed: ${assumption.param} = ${assumption.value}`;
+    list.appendChild(item);
+  }
+  el("assumptions-box").classList.remove("hidden");
 }
 
 async function loadOutputs(task) {
@@ -472,6 +523,8 @@ function resetUi() {
   el("trace-list").innerHTML = "";
   el("outputs-list").innerHTML = "";
   el("questions").classList.add("hidden");
+  el("assumptions-box").classList.add("hidden");
+  el("assumptions-list").innerHTML = "";
   el("error-box").classList.add("hidden");
   el("outputs-card").classList.add("hidden");
   el("trace-card").classList.add("hidden");

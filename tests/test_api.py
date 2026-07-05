@@ -11,7 +11,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from ageo.infrastructure.gis.demo import DemoComposerLlm
+from ageo.infrastructure.gis.demo import DemoComposerLlm, RENTAL_SITE_SEARCH_PLAN
 from ageo.interface.api.app import create_app
 from conftest import FakeOsmGateway
 
@@ -68,7 +68,10 @@ def _cycleway_length_plan() -> dict:
 
 
 class CyclewayLengthComposerLlm:
-    def compose(self, text, tool_catalog, recipes, feedback) -> dict:
+    def compose(
+        self, text, tool_catalog, recipes, feedback, *, profile=None,
+        clarification_answer=None,
+    ) -> dict:
         return _cycleway_length_plan()
 
 
@@ -79,6 +82,7 @@ def client(tmp_path) -> TestClient:
         upload_dir=str(tmp_path / "uploads"),
         composer_llm=DemoComposerLlm(),
         settings_path=str(tmp_path / "llm_settings.json"),
+        profile_path=str(tmp_path / "user_profile.json"),
     )
     return TestClient(app)
 
@@ -139,6 +143,163 @@ def test_needs_input_flow(client) -> None:
     assert answered["status"] == "succeeded"
 
 
+def test_needs_input_carries_structured_questions_and_ledger(client) -> None:
+    task = _run_task(client, "Kutahya'daki tum yollari haritaya cek")
+    assert task["status"] == "needs_input"
+    assert {q["param"] for q in task["questions"]} == {"street_name", "buffer_m"}
+    for question in task["questions"]:
+        assert question["question_type"] == "parameter"
+        assert question["severity"] == "critical"
+        assert question["blocking"] is True
+        assert question["text"]["en"]
+        assert question["text"]["tr"]
+        assert question["kind"]
+    # The ledger is computed even on a needs_input response: the default
+    # guided profile turns the target_srid spec default into an assumption.
+    assert [a["param"] for a in task["assumptions"]] == ["target_srid"]
+    assert task["missing_params"] == [q["param"] for q in task["questions"]]
+
+
+def test_strict_confirm_turns_spec_default_into_confirmation(client) -> None:
+    client.put("/settings/profile", json={
+        "role": "gis_specialist",
+        "gis_level": "advanced",
+        "crs_awareness": "high",
+        "autonomy_preference": "strict_confirm",
+        "explanation_depth": "technical_audit",
+        "language": "en",
+    })
+    first = _run_task(client, TURKISH_COMMAND)
+    assert first["status"] == "needs_input"
+    assert first["missing_params"] == ["target_srid"]
+    assert len(first["questions"]) == 1
+    question = first["questions"][0]
+    assert question["question_type"] == "risk_confirmation"
+    assert question["default_if_skipped"] == "EPSG:5254"
+    assert question["options"][0]["recommended"] is True
+
+    answered = _run_task(client, TURKISH_COMMAND, params={"target_srid": "EPSG:5254"})
+    assert answered["status"] == "succeeded"
+    assert answered["assumptions"] == []
+
+
+def test_guided_run_records_assumption_visible_in_response_and_report(client) -> None:
+    task = _run_task(client, TURKISH_COMMAND)
+    assert task["status"] == "succeeded"
+    assert len(task["assumptions"]) == 1
+    assumption = task["assumptions"][0]
+    assert assumption["param"] == "target_srid"
+    assert assumption["value"] == "EPSG:5254"
+    assert assumption["source"] == "spec_default"
+
+    english = client.get(f"/tasks/{task['task_id']}/report").json()
+    assert "## Assumptions" in english["report"]
+    assert "EPSG:5254" in english["report"]
+    turkish = client.get(f"/tasks/{task['task_id']}/report?lang=tr").json()
+    assert "## Varsayimlar" in turkish["report"]
+    plain = client.get(f"/tasks/{task['task_id']}/report?depth=plain").json()
+    assert "## Assumptions" in plain["report"]
+
+
+def test_composed_task_bypasses_clarifier(client) -> None:
+    # DemoComposerLlm never emits a clarification shape, so this composed
+    # task has nothing to ask - unlike the tests below, which use a fake
+    # that does clarify.
+    task = _run_task(client, RENTAL_COMMAND)
+    assert task["status"] == "succeeded"
+    assert task["questions"] == []
+    assert task["assumptions"] == []
+
+
+class ClarifyingThenPlanComposerLlm:
+    """First call returns a clarification (mirrors the S26 degree/metre
+    trap); once a clarification_answer is supplied, returns the reference
+    rental plan."""
+
+    def compose(
+        self, text, tool_catalog, recipes, feedback, *, profile=None,
+        clarification_answer=None,
+    ) -> dict:
+        if clarification_answer is None:
+            return {
+                "clarification": {
+                    "reason": "buffer distance given in degrees, not metres",
+                    "question": {
+                        "en": "Did you mean roughly 111 m?",
+                        "tr": "Yaklasik 111 m mi demek istediniz?",
+                    },
+                    "options": [
+                        {"value": 111, "label": {"en": "111 m", "tr": "111 m"}, "recommended": True}
+                    ],
+                }
+            }
+        return RENTAL_SITE_SEARCH_PLAN
+
+
+def _client_with_composer(tmp_path, composer_llm) -> TestClient:
+    app = create_app(
+        osm_gateway=FakeOsmGateway(),
+        upload_dir=str(tmp_path / "uploads"),
+        composer_llm=composer_llm,
+        settings_path=str(tmp_path / "llm_settings.json"),
+        profile_path=str(tmp_path / "user_profile.json"),
+    )
+    return TestClient(app)
+
+
+def test_composer_clarification_needs_input_under_guided(tmp_path) -> None:
+    client = _client_with_composer(tmp_path, ClarifyingThenPlanComposerLlm())
+    task = _run_task(client, RENTAL_COMMAND)
+    assert task["status"] == "needs_input"
+    assert task["mode"] == "composed"
+    assert task["missing_params"] == ["clarification_answer"]
+    assert len(task["questions"]) == 1
+    question = task["questions"][0]
+    assert question["question_type"] == "clarification"
+    assert question["param"] == "clarification_answer"
+    assert question["text"]["en"] and question["text"]["tr"]
+    assert question["options"][0]["recommended"] is True
+
+    answered = _run_task(client, RENTAL_COMMAND, params={"clarification_answer": "111"})
+    assert answered["status"] == "succeeded"
+    assert answered["mode"] == "composed"
+
+
+def test_composer_clarification_needs_input_under_strict_confirm(tmp_path) -> None:
+    client = _client_with_composer(tmp_path, ClarifyingThenPlanComposerLlm())
+    client.put("/settings/profile", json={
+        "role": "gis_specialist",
+        "gis_level": "advanced",
+        "crs_awareness": "high",
+        "autonomy_preference": "strict_confirm",
+        "explanation_depth": "technical_audit",
+        "language": "en",
+    })
+    task = _run_task(client, RENTAL_COMMAND)
+    assert task["status"] == "needs_input"
+    assert task["questions"][0]["question_type"] == "clarification"
+
+
+def test_composer_clarification_auto_resolves_under_autonomous(tmp_path) -> None:
+    client = _client_with_composer(tmp_path, ClarifyingThenPlanComposerLlm())
+    client.put("/settings/profile", json={
+        "role": "gis_specialist",
+        "gis_level": "advanced",
+        "crs_awareness": "high",
+        "autonomy_preference": "autonomous",
+        "explanation_depth": "technical_audit",
+        "language": "en",
+    })
+    task = _run_task(client, RENTAL_COMMAND)
+    assert task["status"] == "succeeded"
+    assert task["mode"] == "composed"
+    assert len(task["assumptions"]) == 1
+    assumption = task["assumptions"][0]
+    assert assumption["param"] == "clarification_answer"
+    assert assumption["value"] == 111
+    assert assumption["source"] == "composer_recommended"
+
+
 def test_unmatched_request(client) -> None:
     task = _run_task(client, "write me a poem about maps")
     assert task["status"] == "unmatched"
@@ -174,6 +335,7 @@ def test_composed_scalar_and_table_results_are_exposed(tmp_path) -> None:
         upload_dir=str(tmp_path / "uploads"),
         composer_llm=CyclewayLengthComposerLlm(),
         settings_path=str(tmp_path / "llm_settings.json"),
+        profile_path=str(tmp_path / "user_profile.json"),
     )
     client = TestClient(app)
 
@@ -242,6 +404,33 @@ def test_report_endpoint_english_and_turkish(client) -> None:
     assert "EPSG:5254" in english["report"]
     turkish = client.get(f"/tasks/{task['task_id']}/report?lang=tr").json()
     assert "Islem raporu" in turkish["report"]
+
+
+def test_report_endpoint_accepts_explicit_depth(client) -> None:
+    task = _run_task(client, TURKISH_COMMAND)
+    plain = client.get(f"/tasks/{task['task_id']}/report?depth=plain").json()
+    assert plain["depth"] == "plain"
+    assert "## Executed steps" not in plain["report"]
+
+    steps = client.get(f"/tasks/{task['task_id']}/report").json()
+    assert steps["depth"] == "steps"
+    assert "## Executed steps" in steps["report"]
+
+
+def test_report_endpoint_defaults_depth_from_saved_profile(client) -> None:
+    client.put("/settings/profile", json={
+        "role": "gis_specialist",
+        "gis_level": "advanced",
+        "crs_awareness": "high",
+        "autonomy_preference": "guided",
+        "explanation_depth": "plain_language",
+        "language": "tr",
+    })
+    task = _run_task(client, TURKISH_COMMAND)
+    report = client.get(f"/tasks/{task['task_id']}/report").json()
+    assert report["depth"] == "plain"
+    assert report["lang"] == "tr"
+    assert "## Executed steps" not in report["report"]
 
 
 def test_web_ui_is_served(client) -> None:

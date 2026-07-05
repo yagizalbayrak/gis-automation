@@ -5,16 +5,19 @@
 > "Milestone log" and refresh "Current state" + "Next steps" before ending
 > the session. Rules and architecture live in [AGENTS.md](AGENTS.md) - do
 > not duplicate them here; this file records STATE and HISTORY.
-> Last updated: 2026-07-03 by Codex.
+> Last updated: 2026-07-05 by Claude Code.
 
 ## Current state (the short version)
 
 - **Product**: Autonomous GIS Workbench (`ageo`) - natural-language TR/EN
   geospatial automation. Brief: `PROJECT_BRIEF_FABLE5.md`.
-- **Tests**: 97/97 green, all offline (`uv run pytest`, ~2 s).
+- **Tests**: 142/142 green, all offline (`uv run pytest`, ~2 s).
 - **Runs**: `uv run python -m ageo.interface.api.serve` (real OSM) or
   `--demo` (offline synthetic Kutahya). Web UI at `/` on :8000
-  (respects `PORT`). Preview configs in `.claude/launch.json`.
+  (respects `PORT`; bind host via `AGEO_HOST`, default 127.0.0.1).
+  Preview configs in `.claude/launch.json`. Docker: `docker compose up
+  --build ageo` (:8000) or `--profile demo up ageo-demo` (:8001) for
+  colleagues cloning the repo.
 - **LLM**: user's own **Gemini 2.5 Flash** key, configured via the UI
   Settings panel, stored at `~/.ageo/llm_settings.json` (owner-only,
   masked in API). Adapters read live config per call. A local `.env`
@@ -38,6 +41,30 @@
 - Parallel Codex checkout exists at `~/Desktop/gis-automation-v2-codex`
   (server seen on :8001). Keep the two trees in sync deliberately - they
   do NOT share state.
+- **Adaptive Execution & Dynamic Calibration - increments 1+2+3 landed**:
+  `UserProfile` (store at `~/.ageo/user_profile.json`,
+  `GET|PUT /settings/profile`, compact prompt-line injection into
+  planner/composer LLM calls, profile-driven `/report` lang+depth
+  defaults); the Clarification Engine for registered workflows
+  (`missing_params` upgraded into structured `questions` gated by
+  `autonomy_preference`, plus an `assumptions` ledger for silently
+  defaulted params); AND now the composer itself can raise a structured
+  clarification (`ComposerClarificationRequired`) for genuinely ambiguous
+  novel requests instead of only plan/refuse - **this is the first place
+  `guided` and `autonomous` actually diverge**: both surface the question,
+  but `autonomous` auto-resolves when the composer supplies a recommended
+  option (ledgered as `source="composer_recommended"`), never inventing
+  an answer otherwise. Reuses the exact same `PendingQuestion`/`Assumption`
+  wire shapes and UI rendering as increment 2 - zero UI code changed.
+  Full blueprint-vs-reality breakdown (what's done, what's not, per
+  pillar): [ADAPTIVE_EXECUTION_STATUS.md](ADAPTIVE_EXECUTION_STATUS.md).
+  **Live-verified against the real Gemini 2.5 Flash key (2026-07-05)**:
+  `uv run python -m ageo.evals --only S26` -> `composed_clarification`,
+  matches expectation. The real model asked for a metric distance,
+  offered 111m as the recommended option (~correct conversion of 0.001deg)
+  plus two sensible alternatives (50m/200m), with clean EN+TR text - the
+  prompt rule works in practice, not just in scripted tests. Still
+  missing: a Settings UI tab for the profile.
 
 ## Architecture in one paragraph
 
@@ -88,6 +115,64 @@ Reporter. Full map in AGENTS.md section 3.
    compact table and total outputs, API `results` for non-layer outputs,
    demo OSM parks/cycleways for offline S33/S34-shaped execution coverage
    (97 tests).
+10. **Local Docker packaging** - multi-stage uv Dockerfile (non-root
+    `ageo` user, pre-owned `~/.ageo` for the settings volume),
+    docker-compose.yml with `ageo` (real OSM, :8000) + `ageo-demo`
+    (profile `demo`, :8001) services, `.dockerignore`; serve.py gained
+    `AGEO_HOST` env support (container binds 0.0.0.0, local default
+    unchanged). Verified: image builds, demo container serves /catalog
+    and the UI, settings volume writable as non-root, compose config
+    valid (97 tests).
+11. **UserProfile increment 1** - `domain/value_objects/user_profile.py`
+    (frozen dataclass + StrEnums, `to_prompt_line()`, `report_depth()`),
+    `infrastructure/user/profile_store.py` (mirrors LlmConfigStore, no
+    secret/no chmod), `GET|PUT /settings/profile`, `UserProfile` threaded
+    through `TaskManager` -> `HybridPlanner.plan(profile=...)` /
+    `PlanComposer.compose(profile=...)` -> the two LiteLLM adapters (one
+    compact line appended to the user message, ~20 tokens), and
+    `ProcessReporter.report(depth=...)` with a `show_detail` gate wired
+    into the `/report` endpoint (profile-driven default, old hardcoded
+    default preserved when unconfigured). Fixed profile-kwarg
+    compatibility across every existing `LlmPlannerPort`/`LlmComposerPort`
+    fake (demo, eval harness, test stubs). 18 new tests (115 total).
+12. **Clarification Engine (Adaptive Execution increment 2)** - new
+    `agents/clarifier.py` (`build_questions()`: PendingQuestion +
+    Assumption models, autonomy gating matrix, deterministic TR/EN
+    templates, zero tokens); TaskManager emits structured `questions` +
+    `assumptions` on TaskResponse (`missing_params` kept for backward
+    compat); reporter renders an Assumptions section at EVERY depth;
+    web UI renders structured questions (lang-aware text, prefilled
+    defaults, recommended hints) + an assumptions card. Intentional
+    asymmetry: guided == autonomous for registered workflows until
+    composer clarifications land. Browser-verified all three autonomy
+    flows in demo mode, zero console errors (134 tests).
+13. **Composer ClarificationRequest (Adaptive Execution increment 3)** -
+    new `ComposerClarificationRequired` exception in `composer.py` (not an
+    `AgeoError`, so existing handlers never swallow it silently);
+    `PlanComposer._parse_clarification()` detects and defensively
+    sanitizes a new `{"clarification": {...}}` wire shape (checked before
+    the empty-steps refusal), reusing increment 2's `PendingQuestion`/
+    `Assumption` models; capped at one clarification round per task (a
+    second ask after an answer was supplied becomes an honest
+    `plan_refused:`); `litellm_composer.py` prompt gained a rule teaching
+    the model when to clarify (canonical case: a distance given in
+    degrees, not metres) and to never ask twice once answered;
+    `TaskManager._submit_composed()` gates guided/strict_confirm (always
+    ask) vs. autonomous (auto-resolve only when the composer supplied a
+    recommended option, ledgered as `source="composer_recommended"`) -
+    **the first point where guided and autonomous actually diverge**.
+    Eval harness gained `COMPOSED_CLARIFICATION` outcome + a `clarification`
+    expect value; scenario S26 (the degree/metre trap) upgraded from
+    `expect: gap` to `expect: clarification`. Zero UI code changed -
+    increment 2's generic question/assumption rendering already covers it
+    (confirmed by grep, no `question_type`/`source` switch exists in
+    `app.js`). All verified with scripted fakes only, zero network calls
+    (142 tests). **Live-verified 2026-07-05**: `uv run python -m ageo.evals
+    --only S26` against the real configured Gemini 2.5 Flash key ->
+    `composed_clarification`, matches expectation - the model asked for a
+    metric distance with 111m recommended (correct conversion) plus two
+    alternative options, clean EN+TR text. Result in
+    `evals_results/20260705_230859.json`.
 
 ## Key decisions (and why)
 
@@ -133,6 +218,7 @@ Reporter. Full map in AGENTS.md section 3.
    owed): workspace-layer endpoint + step ids in trace + ghost layers with
    fade-in during execution. Implementation sketch in AGENTS.md section 8.
 3. First real composer flight in the browser UI with the user's Gemini key
-   (eval ran headless; UI path untested with live LLM).
-4. Phase 3 batch folder processing; then pgvector RAG, PostGIS workspace,
-   Docker packaging (AGENTS.md section 8).
+   (eval ran headless; UI path untested with live LLM). A Settings UI tab
+   for the profile is a smaller, related companion task.
+4. Phase 3 batch folder processing; then pgvector RAG, PostGIS workspace
+   (AGENTS.md section 8).

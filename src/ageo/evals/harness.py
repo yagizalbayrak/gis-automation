@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Any
 
 import ageo.application.tools.impl  # noqa: F401 - registers tools
-from ageo.application.agents.composer import LlmComposerPort, PlanComposer, plan_preview
+from ageo.application.agents.composer import (
+    ComposerClarificationRequired,
+    LlmComposerPort,
+    PlanComposer,
+    plan_preview,
+)
 from ageo.application.agents.planner import DeterministicPlanner
 from ageo.application.rag.store import RecipeStore
 from ageo.application.tools.errors import ComposerError, GatewayError
@@ -46,6 +51,7 @@ REGISTERED = "registered"
 NEEDS_INPUT = "needs_input"
 COMPOSED_OK = "composed_ok"
 COMPOSED_REFUSED = "composed_refused"  # empty plan + stated missing capability
+COMPOSED_CLARIFICATION = "composed_clarification"  # composer asked a structured question
 COMPOSED_UNKNOWN_TOOL = "composed_error_unknown_tool"
 COMPOSED_GEODETIC = "composed_error_geodetic"
 COMPOSED_STRUCTURAL = "composed_error_structural"
@@ -64,6 +70,7 @@ _EXPECT_OK = {
     # composed_ok on a gap scenario needs MANUAL review - it may be a fake
     # substitute (e.g. buffer posing as isochrone), so it does not count.
     "gap": {COMPOSED_REFUSED, COMPOSED_UNKNOWN_TOOL},
+    "clarification": {COMPOSED_CLARIFICATION},
 }
 
 
@@ -85,8 +92,14 @@ class RecordingComposerLlm:
     def reset(self) -> None:
         self.attempts = []
 
-    def compose(self, text, tool_catalog, recipes, feedback):
-        payload = self._inner.compose(text, tool_catalog, recipes, feedback)
+    def compose(
+        self, text, tool_catalog, recipes, feedback, *, profile=None,
+        clarification_answer=None,
+    ):
+        payload = self._inner.compose(
+            text, tool_catalog, recipes, feedback,
+            profile=profile, clarification_answer=clarification_answer,
+        )
         self.attempts.append({"feedback_in": feedback, "plan_out": payload})
         return payload
 
@@ -149,6 +162,12 @@ class EvalRunner:
         started = time.monotonic()
         try:
             composed = self.composer.compose(text)
+        except ComposerClarificationRequired as exc:
+            return COMPOSED_CLARIFICATION, {
+                "question": exc.question.model_dump(mode="json"),
+                "attempts": self.recording.attempts,
+                "elapsed_s": round(time.monotonic() - started, 1),
+            }
         except ComposerError as exc:
             return self._classify_composer_error(str(exc)), {
                 "error": str(exc),

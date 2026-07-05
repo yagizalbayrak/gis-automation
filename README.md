@@ -62,6 +62,34 @@ Implemented:
   from the trace. Served at `GET /tasks/{id}/report?lang=en|tr` and shown
   in the UI with an EN/TR toggle.
 
+- **User profile** (`src/ageo/domain/value_objects/user_profile.py` +
+  `src/ageo/infrastructure/user/profile_store.py`): role, GIS skill level,
+  CRS awareness, autonomy preference and explanation depth, persisted to
+  `~/.ageo/user_profile.json`. Injected as a compact one-line string into
+  the planner's and composer's LLM prompts, and drives the report's
+  `depth` (plain/steps/audit) when not explicitly requested. Endpoints:
+  `GET/PUT /settings/profile`. No Settings UI tab yet (API-only).
+
+- **Clarification Engine** (`src/ageo/application/agents/clarifier.py`,
+  `src/ageo/application/agents/composer.py`): missing workflow parameters
+  become structured questions with severity, Turkish+English text,
+  options and defaults - rendered as a rich form in the UI. The profile's
+  autonomy preference gates behavior: `strict_confirm` asks the user to
+  confirm every spec default (prefilled, one click); `guided`/`autonomous`
+  apply defaults silently but record each one in an **Assumption Ledger**
+  shown in the response, a UI card and the report at every depth - a
+  silent default is never invisible. Required parameters without defaults
+  are always asked: autonomy never invents values. The LLM plan composer
+  can also raise a structured clarification for genuinely ambiguous novel
+  requests (e.g. a buffer distance given in degrees instead of metres)
+  instead of only producing a plan or an honest refusal - **this is where
+  `guided` and `autonomous` first actually diverge**: both surface the
+  question, but `autonomous` auto-resolves when the composer supplies a
+  recommended option (ledgered, never invented). Live-verified against
+  the real configured Gemini 2.5 Flash key: the degree/metre trap
+  scenario correctly produces a clarification with a recommended
+  metric-distance option and clean EN+TR text (see HANDOFF.md).
+
 - **LLM connection settings** (`src/ageo/infrastructure/llm/config.py` +
   Settings panel in the UI): choose a provider (Google Gemini default,
   Anthropic, OpenAI, or any custom LiteLLM model id), paste an API key,
@@ -77,7 +105,8 @@ Implemented:
   buffers) with fit-to-results. Vanilla JS, no build toolchain.
 - **Interface layer** (`src/ageo/interface/api/`): FastAPI app.
   `POST /tasks` runs planner -> guarded runner (with `needs_input` +
-  `missing_params` for human-in-the-loop questions), `GET /tasks/{id}/trace`
+  `missing_params`/structured `questions` for human-in-the-loop, and an
+  `assumptions` ledger for silently-defaulted params), `GET /tasks/{id}/trace`
   and `/events` (SSE) expose the full process log, `/layers/{name}` serves
   display-ready EPSG:4326 GeoJSON for the map panel (analysis CRS is
   preserved in the workspace), scalar/table outputs are returned under
@@ -92,7 +121,7 @@ delivery package with manifest).
 
 ```bash
 uv sync                                             # install
-uv run pytest                                       # 97 tests, all offline
+uv run pytest                                       # 142 tests, all offline
 uv run python -m ageo.interface.api.serve           # server on :8000, real OSM
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
 ```
@@ -108,6 +137,18 @@ AGEO_COMPOSER_MODEL=gemini/gemini-2.5-flash
 Saved UI settings in `~/.ageo/llm_settings.json` take precedence over `.env`.
 If the UI has an old key saved, update it in Settings or remove that JSON file.
 
+### Docker
+
+```bash
+docker compose up --build ageo                 # real OSM on :8000
+docker compose --profile demo up ageo-demo     # offline demo on :8001
+```
+
+The `ageo` service reads `.env` from the project root if present (same keys
+as above). LLM settings saved via the UI persist in the `ageo-settings`
+volume. `.env` is never baked into the image. Inside a container the server
+binds `AGEO_HOST=0.0.0.0`; outside Docker the default stays `127.0.0.1`.
+
 Open http://127.0.0.1:8000/ and try the example chips, e.g.:
 `Kutahya'daki "Ataturk Caddesi" icin 25 m buffer uygula`
 or the composed multi-criteria scenario:
@@ -117,4 +158,5 @@ mesafede kiralik ev icin uygun alanlari bul`
 ## Not yet built (by design order)
 
 Vector-store RAG (pgvector) behind the RecipeStore interface, PostGIS
-workspace, Docker packaging and sandbox, batch folder processing (Phase 3).
+workspace, sandbox story for any future generated-code path, batch folder
+processing (Phase 3). Local Docker packaging (Dockerfile + compose) is done.

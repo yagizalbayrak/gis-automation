@@ -12,6 +12,7 @@ import json
 import litellm
 
 from ageo.application.tools.errors import GatewayError
+from ageo.domain.value_objects.user_profile import UserProfile
 from ageo.infrastructure.llm.config import LlmConfig, LlmConfigStore
 
 _ENV_MODEL_VAR = "AGEO_COMPOSER_MODEL"
@@ -53,6 +54,28 @@ Hard rules:
   capability is missing. Do NOT substitute a different analysis (a
   circular buffer is NOT an isochrone; fetching data is NOT computing
   statistics) and do NOT return a partial preparation plan.
+- If the request is genuinely AMBIGUOUS in a way you cannot safely resolve
+  alone - for example, a distance given in DEGREES (e.g. "0.001 derece
+  tampon"/"0.001 degree buffer"): a degree is not a fixed distance, but at
+  a given latitude it corresponds to a rough metre value (0.001 deg is
+  roughly 111 m at mid-latitudes) - do NOT silently guess and do NOT
+  bluntly refuse. Instead return ONLY this JSON object:
+  {
+    "clarification": {
+      "reason": "<short EN reason>",
+      "question": {"en": "...", "tr": "..."},
+      "options": [
+        {"value": "<literal to feed back, e.g. a metre number>",
+         "label": {"en": "...", "tr": "..."}, "recommended": true}
+      ]
+    }
+  }
+  This is DIFFERENT from the refusal shape ("steps": []): use clarification
+  only when a single follow-up answer would let you produce a real plan,
+  not when the capability itself is missing.
+- If a "User clarification answer" section is present in the input, you
+  MUST use it to produce a final plan (or an honest "steps": [] refusal if
+  it turns out impossible) - do NOT emit another "clarification" object.
 """
 
 
@@ -84,6 +107,9 @@ class LiteLlmComposer:
         tool_catalog: list[dict],
         recipes: list[str],
         feedback: str | None,
+        *,
+        profile: UserProfile | None = None,
+        clarification_answer: str | None = None,
     ) -> dict:
         sections = [
             f"Tool catalog:\n{json.dumps(tool_catalog, ensure_ascii=False)}",
@@ -91,6 +117,10 @@ class LiteLlmComposer:
         if recipes:
             sections.append("Recipe guidance:\n" + "\n---\n".join(recipes))
         sections.append(f"User request:\n{text}")
+        if profile is not None:
+            sections.append(profile.to_prompt_line())
+        if clarification_answer is not None:
+            sections.append(f"User clarification answer: {clarification_answer}")
         if feedback:
             sections.append(
                 "Your previous plan was REJECTED by the validator with this "

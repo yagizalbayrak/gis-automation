@@ -13,6 +13,7 @@ import pytest
 
 from ageo.application.agents.planner import HybridPlanner, PlannerDecision
 from ageo.application.tools.errors import GatewayError
+from ageo.domain.value_objects.user_profile import UserProfile, UserRole
 from ageo.infrastructure.llm import litellm_planner
 from ageo.infrastructure.llm.litellm_planner import LiteLlmPlanner
 
@@ -72,13 +73,42 @@ def test_out_of_range_confidence_is_clamped(monkeypatch, catalog) -> None:
     assert LiteLlmPlanner(model="test/model").plan("x", catalog).confidence == 1.0
 
 
+def test_profile_line_is_injected_into_user_message(monkeypatch, catalog) -> None:
+    content = '{"workflow": null, "params": {}, "confidence": 0.1, "explanation": "x"}'
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _completion_returning(content)()
+
+    monkeypatch.setattr(litellm_planner.litellm, "completion", fake_completion)
+    profile = UserProfile(role=UserRole.URBAN_PLANNER)
+    LiteLlmPlanner(model="test/model").plan("x", catalog, profile=profile)
+    user_content = captured["messages"][1]["content"]
+    assert "role=urban_plan" in user_content
+
+
+def test_profile_line_is_omitted_when_none(monkeypatch, catalog) -> None:
+    content = '{"workflow": null, "params": {}, "confidence": 0.1, "explanation": "x"}'
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return _completion_returning(content)()
+
+    monkeypatch.setattr(litellm_planner.litellm, "completion", fake_completion)
+    LiteLlmPlanner(model="test/model").plan("x", catalog)
+    user_content = captured["messages"][1]["content"]
+    assert "USER role=" not in user_content
+
+
 class StubLlm:
     def __init__(self, decision: PlannerDecision | None = None, error: Exception | None = None):
         self.decision = decision
         self.error = error
         self.calls = 0
 
-    def plan(self, text, workflow_catalog):
+    def plan(self, text, workflow_catalog, *, profile=None):
         self.calls += 1
         if self.error:
             raise self.error

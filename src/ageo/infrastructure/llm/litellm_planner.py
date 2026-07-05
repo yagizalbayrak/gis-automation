@@ -20,6 +20,7 @@ import litellm
 
 from ageo.application.agents.planner import PlannerDecision
 from ageo.application.tools.errors import GatewayError
+from ageo.domain.value_objects.user_profile import UserProfile
 from ageo.infrastructure.llm.config import LlmConfig, LlmConfigStore
 
 _ENV_MODEL_VAR = "AGEO_PLANNER_MODEL"
@@ -66,20 +67,26 @@ class LiteLlmPlanner:
             return self._config.effective(_ENV_MODEL_VAR)
         raise GatewayError("llm_not_configured: planner has no model configured")
 
-    def plan(self, text: str, workflow_catalog: list[dict]) -> PlannerDecision:
+    def plan(
+        self,
+        text: str,
+        workflow_catalog: list[dict],
+        *,
+        profile: UserProfile | None = None,
+    ) -> PlannerDecision:
         config = self._effective()
+        user_content = (
+            f"Workflow catalog:\n{json.dumps(workflow_catalog, ensure_ascii=False)}\n\n"
+            f"User request:\n{text}"
+        )
+        if profile is not None:
+            user_content += f"\n\n{profile.to_prompt_line()}"
         try:
             response = litellm.completion(
                 **config.completion_kwargs(),
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Workflow catalog:\n{json.dumps(workflow_catalog, ensure_ascii=False)}\n\n"
-                            f"User request:\n{text}"
-                        ),
-                    },
+                    {"role": "user", "content": user_content},
                 ],
                 temperature=0.0,
                 max_tokens=self._max_tokens,

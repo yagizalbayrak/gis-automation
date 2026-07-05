@@ -1,0 +1,33 @@
+services:
+  ageo:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ageo-settings:/home/ageo/.ageo
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/catalog')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+  ageo-demo:
+    build: .
+    profiles: ["demo"]
+    ports:
+      - "8001:8000"
+    environment:
+      AGEO_DEMO: "1"
+    volumes:
+      - ageo-settings:/home/ageo/.ageo
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/catalog')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+volumes:
+  ageo-settings:

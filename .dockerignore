@@ -1,0 +1,17 @@
+.git
+.gitignore
+.claude
+.venv
+.env
+.env.example
+.pytest_cache
+.DS_Store
+__pycache__
+*.pyc
+tests
+evals_results
+*.xlsx
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore

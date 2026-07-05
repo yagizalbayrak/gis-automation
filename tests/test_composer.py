@@ -7,6 +7,7 @@ validation cage around it - the same one bundled workflows live in.
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -29,9 +30,14 @@ class ScriptedComposerLlm:
         self._plans = list(plans)
         self.calls = 0
         self.feedback_seen: list[str | None] = []
+        self.clarification_answers_seen: list[str | None] = []
 
-    def compose(self, text, tool_catalog, recipes, feedback) -> dict:
+    def compose(
+        self, text, tool_catalog, recipes, feedback, *, profile=None,
+        clarification_answer=None,
+    ) -> dict:
         self.feedback_seen.append(feedback)
+        self.clarification_answers_seen.append(clarification_answer)
         plan = self._plans[min(self.calls, len(self._plans) - 1)]
         self.calls += 1
         return plan
@@ -243,3 +249,124 @@ def test_recipe_store_matches_turkish_and_english(crs_info) -> None:
     english = store.search("find sites near a school and main roads")
     assert any("PROXIMITY SITE SEARCH" in r for r in english)
     assert store.search("completely unrelated request about poetry") == []
+
+
+def test_profile_line_is_injected_into_composer_user_message(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from ageo.domain.value_objects.user_profile import UserProfile, UserRole
+    from ageo.infrastructure.llm import litellm_composer
+    from ageo.infrastructure.llm.litellm_composer import LiteLlmComposer
+
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        content = json.dumps({"steps": [], "summary": "no capability"})
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+    monkeypatch.setattr(litellm_composer.litellm, "completion", fake_completion)
+    profile = UserProfile(role=UserRole.CIVIL_ENGINEER)
+    LiteLlmComposer(model="test/model").compose(
+        "x", [], [], None, profile=profile
+    )
+    user_content = captured["messages"][1]["content"]
+    assert "role=civil_eng" in user_content
+
+
+def test_profile_line_is_omitted_from_composer_when_none(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from ageo.infrastructure.llm import litellm_composer
+    from ageo.infrastructure.llm.litellm_composer import LiteLlmComposer
+
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        content = json.dumps({"steps": [], "summary": "no capability"})
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+        )
+
+    monkeypatch.setattr(litellm_composer.litellm, "completion", fake_completion)
+    LiteLlmComposer(model="test/model").compose("x", [], [], None)
+    user_content = captured["messages"][1]["content"]
+    assert "USER role=" not in user_content
+
+
+def _clarification_payload(recommended_value=111) -> dict:
+    return {
+        "clarification": {
+            "reason": "0.001 degrees is not a fixed distance",
+            "question": {"en": "Did you mean ~111 m?", "tr": "111 m mi demek istediniz?"},
+            "options": [
+                {
+                    "value": recommended_value,
+                    "label": {"en": "111 m", "tr": "111 m"},
+                    "recommended": True,
+                }
+            ],
+        }
+    }
+
+
+def test_clarification_payload_raises_composer_clarification_required(
+    composer_factory,
+) -> None:
+    from ageo.application.agents.composer import ComposerClarificationRequired
+
+    composer, llm = composer_factory(_clarification_payload())
+    with pytest.raises(ComposerClarificationRequired) as excinfo:
+        composer.compose("0.001 derece tampon olustur")
+    question = excinfo.value.question
+    assert question.question_type == "clarification"
+    assert question.param == "clarification_answer"
+    assert question.severity == "material"
+    assert question.blocking is True
+    assert question.text["en"] and question.text["tr"]
+    assert len(question.options) == 1
+    assert question.options[0].recommended is True
+    assert question.options[0].value == 111
+    assert llm.clarification_answers_seen == [None]
+
+
+def test_clarification_answer_is_threaded_to_the_scripted_llm(composer_factory) -> None:
+    composer, llm = composer_factory(RENTAL_SITE_SEARCH_PLAN)
+    composer.compose(RENTAL_REQUEST, clarification_answer="111")
+    assert llm.clarification_answers_seen == ["111"]
+
+
+def test_second_clarification_after_answer_supplied_is_capped_to_refusal(
+    composer_factory,
+) -> None:
+    """The model asking again despite an answer must not loop forever: the
+    second clarification becomes an honest ComposerError, not another
+    ComposerClarificationRequired."""
+    composer, llm = composer_factory(_clarification_payload())
+    with pytest.raises(ComposerError, match="plan_refused: 0.001 degrees is not a fixed distance"):
+        composer.compose(RENTAL_REQUEST, clarification_answer="111")
+    assert llm.clarification_answers_seen == ["111"]
+
+
+def test_malformed_clarification_payload_is_sanitized_defensively(composer_factory) -> None:
+    """Missing en/tr, non-bool recommended, non-list options must never
+    raise a raw KeyError/TypeError - mirrors _to_decision() sanitization."""
+    from ageo.application.agents.composer import ComposerClarificationRequired
+
+    malformed = {
+        "clarification": {
+            "reason": "",
+            "question": {"en": ""},  # missing tr
+            "options": "not-a-list",
+        }
+    }
+    composer, _ = composer_factory(malformed)
+    with pytest.raises(ComposerClarificationRequired) as excinfo:
+        composer.compose("belirsiz istek")
+    question = excinfo.value.question
+    assert question.text["en"]  # defaulted, never empty
+    assert question.text["tr"]  # defaulted, never empty
+    assert question.options == ()

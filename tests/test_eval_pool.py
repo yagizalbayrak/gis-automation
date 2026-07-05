@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from ageo.evals.harness import (
+    COMPOSED_CLARIFICATION,
     COMPOSED_GEODETIC,
     COMPOSED_REFUSED,
     COMPOSED_SCHEMA,
@@ -15,7 +16,7 @@ from ageo.evals.harness import (
     load_scenarios,
 )
 
-VALID_EXPECTS = {"registered", "needs_input", "composed", "gap"}
+VALID_EXPECTS = {"registered", "needs_input", "composed", "gap", "clarification"}
 
 
 def test_pool_integrity() -> None:
@@ -78,7 +79,10 @@ def test_empty_plan_is_an_honest_refusal_without_retry(crs_info) -> None:
     class RefusingLlm:
         calls = 0
 
-        def compose(self, text, tool_catalog, recipes, feedback):
+        def compose(
+            self, text, tool_catalog, recipes, feedback, *, profile=None,
+            clarification_answer=None,
+        ):
             self.calls += 1
             return {
                 "name": "cannot_do",
@@ -92,3 +96,34 @@ def test_empty_plan_is_an_honest_refusal_without_retry(crs_info) -> None:
     with pytest.raises(ComposerError, match="plan_refused: No tool exists"):
         composer.compose("slope analysis please")
     assert llm.calls == 1  # refusal is terminal, not retried
+
+
+def test_composer_clarification_is_classified_and_scenario_pool_expects_it() -> None:
+    """The harness must classify a ComposerClarificationRequired as its own
+    outcome, and the S26 degree/metre trap scenario must now expect it."""
+
+    class ClarifyingLlm:
+        def compose(
+            self, text, tool_catalog, recipes, feedback, *, profile=None,
+            clarification_answer=None,
+        ) -> dict:
+            return {
+                "clarification": {
+                    "reason": "0.001 degrees is not a fixed distance",
+                    "question": {
+                        "en": "Did you mean ~111 m?",
+                        "tr": "111 m mi demek istediniz?",
+                    },
+                    "options": [
+                        {"value": 111, "label": {"en": "111 m", "tr": "111 m"}, "recommended": True}
+                    ],
+                }
+            }
+
+    runner = EvalRunner(use_llm=True)
+    runner.recording._inner = ClarifyingLlm()  # replace the real LiteLlmComposer
+    outcome, _ = runner._route("0.001 derece tampon")
+    assert outcome == COMPOSED_CLARIFICATION
+
+    scenarios = {s["id"]: s for s in load_scenarios()}
+    assert scenarios["S26"]["expect"] == "clarification"

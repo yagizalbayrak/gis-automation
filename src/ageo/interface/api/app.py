@@ -3,8 +3,9 @@
 Endpoints (the operational workbench contract from the brief, section 16):
 
 - POST /tasks            natural-language task -> plan -> execute
-                         (status needs_input + missing_params drives the
-                         human-in-the-loop question flow)
+                         (status needs_input + missing_params/questions
+                         drives the human-in-the-loop flow; assumptions
+                         records params that fell back to spec defaults)
 - GET  /tasks/{id}       status, chosen workflow, outputs, error
 - GET  /tasks/{id}/trace full process log (JSON)
 - GET  /tasks/{id}/events  live Server-Sent Events stream of trace events
@@ -34,8 +35,18 @@ from ageo.application.tools.contract import LayerRef, OsmGateway
 from ageo.application.tools.registry import registry as tool_registry
 from ageo.application.workflows.defs import register_bundled
 from ageo.application.workflows.registry import WorkflowRegistry
+from ageo.domain.value_objects.user_profile import (
+    AutonomyPreference,
+    CrsAwareness,
+    ExplanationDepth,
+    GisLevel,
+    ProfileLanguage,
+    UserProfile,
+    UserRole,
+)
 from ageo.infrastructure.gis.crs_info import PyprojCrsInfo
 from ageo.infrastructure.llm.config import PROVIDER_PRESETS, LlmConfig, LlmConfigStore
+from ageo.infrastructure.user.profile_store import UserProfileStore
 from ageo.interface.api.schemas import (
     CreateTaskRequest,
     LayerResponse,
@@ -44,6 +55,8 @@ from ageo.interface.api.schemas import (
     LlmTestResponse,
     TaskResponse,
     UploadResponse,
+    UserProfileResponse,
+    UserProfileUpdate,
 )
 from ageo.interface.api.tasks import TERMINAL_STATUSES, TaskManager, TaskRecord
 
@@ -58,6 +71,7 @@ def create_app(
     llm_planner: LlmPlannerPort | None = None,
     composer_llm: LlmComposerPort | None = None,
     settings_path: str | None = None,
+    profile_path: str | None = None,
 ) -> FastAPI:
     """Build the app. Pass a fake osm_gateway in tests; None uses the real
     Overpass gateway.
@@ -77,6 +91,7 @@ def create_app(
     workflows = WorkflowRegistry(tool_registry, crs_info)
     register_bundled(workflows)
     llm_config = LlmConfigStore(settings_path)
+    user_profile = UserProfileStore(profile_path)
 
     if llm_planner is None:
         from ageo.infrastructure.llm.litellm_planner import LiteLlmPlanner
@@ -92,7 +107,7 @@ def create_app(
 
     manager = TaskManager(
         tool_registry, workflows, crs_info, osm_gateway,
-        planner=planner, composer=composer,
+        planner=planner, composer=composer, user_profile=user_profile,
     )
     reporter = ProcessReporter()
     uploads = Path(upload_dir or tempfile.mkdtemp(prefix="ageo_uploads_"))
@@ -173,6 +188,30 @@ def create_app(
             message=f"Model responded ({content[:40] or 'empty reply'}).",
         )
 
+    @app.get("/settings/profile", response_model=UserProfileResponse)
+    def get_profile() -> UserProfileResponse:
+        profile = user_profile.get_or_default()
+        return UserProfileResponse(
+            role=profile.role.value,
+            gis_level=profile.gis_level.value,
+            crs_awareness=profile.crs_awareness.value,
+            autonomy_preference=profile.autonomy_preference.value,
+            explanation_depth=profile.explanation_depth.value,
+            language=profile.language.value,
+        )
+
+    @app.put("/settings/profile", response_model=UserProfileResponse)
+    def update_profile(update: UserProfileUpdate) -> UserProfileResponse:
+        user_profile.save(UserProfile(
+            role=UserRole(update.role),
+            gis_level=GisLevel(update.gis_level),
+            crs_awareness=CrsAwareness(update.crs_awareness),
+            autonomy_preference=AutonomyPreference(update.autonomy_preference),
+            explanation_depth=ExplanationDepth(update.explanation_depth),
+            language=ProfileLanguage(update.language),
+        ))
+        return get_profile()
+
     @app.post("/tasks", response_model=TaskResponse)
     def create_task(request: CreateTaskRequest, wait: bool = False) -> TaskResponse:
         record = manager.submit(request.text, request.params, wait=wait)
@@ -188,8 +227,18 @@ def create_app(
         return [event.model_dump(mode="json") for event in record.trace.events]
 
     @app.get("/tasks/{task_id}/report")
-    def get_report(task_id: str, lang: str = "en") -> dict:
+    def get_report(
+        task_id: str, lang: str | None = None, depth: str | None = None
+    ) -> dict:
         record = _record_or_404(manager, task_id)
+        # Only override the long-standing hardcoded defaults ("en" / full
+        # detail) when a profile has actually been saved - an unconfigured
+        # workbench must report exactly as it always has.
+        saved_profile = user_profile.get()
+        effective_lang = lang or (saved_profile.language.value if saved_profile else "en")
+        effective_depth = depth or (
+            saved_profile.report_depth() if saved_profile else "steps"
+        )
         report = reporter.report(
             text=record.text,
             workflow=record.workflow,
@@ -202,9 +251,16 @@ def create_app(
                 if isinstance(value, LayerRef)
             },
             error=record.error,
-            lang=lang,
+            lang=effective_lang,
+            depth=effective_depth,
+            assumptions=[a.model_dump(mode="json") for a in record.assumptions],
         )
-        return {"task_id": task_id, "lang": lang, "report": report}
+        return {
+            "task_id": task_id,
+            "lang": effective_lang,
+            "depth": effective_depth,
+            "report": report,
+        }
 
     @app.get("/tasks/{task_id}/events")
     def stream_events(task_id: str) -> StreamingResponse:

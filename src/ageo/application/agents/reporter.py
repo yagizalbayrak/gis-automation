@@ -29,6 +29,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "status": "Status",
         "no_steps": "No tools were executed.",
         "features": "features",
+        "assumptions": "Assumptions",
     },
     "tr": {
         "title": "Islem raporu",
@@ -43,6 +44,7 @@ _LABELS: dict[str, dict[str, str]] = {
         "status": "Durum",
         "no_steps": "Hicbir arac calistirilmadi.",
         "features": "obje",
+        "assumptions": "Varsayimlar",
     },
 }
 
@@ -67,48 +69,63 @@ class ProcessReporter:
         outputs: dict[str, str],
         error: str | None = None,
         lang: str = "en",
+        depth: str = "steps",
+        assumptions: list[dict[str, Any]] | None = None,
     ) -> str:
         labels = _LABELS.get(lang, _LABELS["en"])
         status_text = _STATUS_TR.get(status, status) if lang == "tr" else status
+        show_detail = depth != "plain"  # params, executed steps, CRS, warnings
 
         lines: list[str] = [f"# {labels['title']}", ""]
         lines.append(f"{labels['request']}: {text}")
         lines.append(f"{labels['status']}: {status_text}")
         if workflow:
             lines.append(f"{labels['workflow']}: {workflow}")
-        if params:
+        if params and show_detail:
             rendered = ", ".join(f"{k}={v}" for k, v in params.items() if v is not None)
             lines.append(f"{labels['params']}: {rendered}")
 
-        steps = [e for e in events if e.phase is TracePhase.TOOL_FINISHED]
-        lines.append("")
-        lines.append(f"## {labels['steps']}")
-        if steps:
-            for index, event in enumerate(steps, start=1):
-                summary = _result_summary(event, labels)
-                lines.append(f"{index}. {event.subject}{summary}")
-        else:
-            lines.append(labels["no_steps"])
-
-        crs_decisions = [
-            f"- {e.subject}.{e.detail.get('input')}: {e.detail.get('crs')}"
-            for e in events
-            if e.phase is TracePhase.GUARD_PASSED and e.detail.get("crs")
-        ]
-        if crs_decisions:
+        # Assumptions render at EVERY depth, including "plain": a silent
+        # default must never be invisible to the user.
+        if assumptions:
             lines.append("")
-            lines.append(f"## {labels['crs']}")
-            lines.extend(dict.fromkeys(crs_decisions))  # keep order, drop repeats
+            lines.append(f"## {labels['assumptions']}")
+            for assumption in assumptions:
+                text_map = assumption.get("text") or {}
+                lines.append(
+                    f"- {text_map.get(lang) or text_map.get('en') or assumption.get('param')}"
+                )
 
-        warnings = [
-            f"- {e.subject}: {e.detail.get('message') or e.detail.get('error')}"
-            for e in events
-            if e.phase in (TracePhase.GUARD_FAILED, TracePhase.TOOL_FAILED)
-        ]
-        if warnings:
+        if show_detail:
+            steps = [e for e in events if e.phase is TracePhase.TOOL_FINISHED]
             lines.append("")
-            lines.append(f"## {labels['warnings']}")
-            lines.extend(warnings)
+            lines.append(f"## {labels['steps']}")
+            if steps:
+                for index, event in enumerate(steps, start=1):
+                    summary = _result_summary(event, labels)
+                    lines.append(f"{index}. {event.subject}{summary}")
+            else:
+                lines.append(labels["no_steps"])
+
+            crs_decisions = [
+                f"- {e.subject}.{e.detail.get('input')}: {e.detail.get('crs')}"
+                for e in events
+                if e.phase is TracePhase.GUARD_PASSED and e.detail.get("crs")
+            ]
+            if crs_decisions:
+                lines.append("")
+                lines.append(f"## {labels['crs']}")
+                lines.extend(dict.fromkeys(crs_decisions))  # keep order, drop repeats
+
+            warnings = [
+                f"- {e.subject}: {e.detail.get('message') or e.detail.get('error')}"
+                for e in events
+                if e.phase in (TracePhase.GUARD_FAILED, TracePhase.TOOL_FAILED)
+            ]
+            if warnings:
+                lines.append("")
+                lines.append(f"## {labels['warnings']}")
+                lines.extend(warnings)
 
         if outputs:
             lines.append("")

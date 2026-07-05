@@ -57,7 +57,9 @@ class FakeLlmPlanner:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def plan(self, text: str, workflow_catalog: list[dict]) -> PlannerDecision:
+    def plan(
+        self, text: str, workflow_catalog: list[dict], *, profile=None
+    ) -> PlannerDecision:
         self.calls.append(text)
         assert any(w["name"] == "road_fetch_and_buffer" for w in workflow_catalog)
         return PlannerDecision(

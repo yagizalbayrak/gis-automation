@@ -24,6 +24,7 @@ from pydantic import Field
 from ageo.application.tools.contract import StrictModel
 from ageo.application.workflows.registry import WorkflowRegistry
 from ageo.application.workflows.spec import WorkflowParam, WorkflowSpec
+from ageo.domain.value_objects.user_profile import UserProfile
 
 # Turkish-aware folding so 'yolları' matches the pattern 'yollari'.
 _TR_FOLD = str.maketrans({
@@ -72,14 +73,20 @@ class LlmPlannerPort(Protocol):
     the runner validates before anything executes.
     """
 
-    def plan(self, text: str, workflow_catalog: list[dict]) -> PlannerDecision: ...
+    def plan(
+        self,
+        text: str,
+        workflow_catalog: list[dict],
+        *,
+        profile: UserProfile | None = None,
+    ) -> PlannerDecision: ...
 
 
 class DeterministicPlanner:
     def __init__(self, workflows: WorkflowRegistry) -> None:
         self._workflows = workflows
 
-    def plan(self, text: str) -> PlannerDecision:
+    def plan(self, text: str, *, profile: UserProfile | None = None) -> PlannerDecision:
         spec, matched = self._select_workflow(text)
         if spec is None:
             return PlannerDecision(
@@ -175,12 +182,14 @@ class HybridPlanner:
         self._workflows = workflows
         self._llm = llm
 
-    def plan(self, text: str) -> PlannerDecision:
+    def plan(self, text: str, *, profile: UserProfile | None = None) -> PlannerDecision:
         decision = self._deterministic.plan(text)
         if decision.ready or self._llm is None:
             return decision
         try:
-            llm_decision = self._llm.plan(text, self._workflows.catalog())
+            llm_decision = self._llm.plan(
+                text, self._workflows.catalog(), profile=profile
+            )
         except Exception:
             return decision
         return self._sanitize(llm_decision, fallback=decision)

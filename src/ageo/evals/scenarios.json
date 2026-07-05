@@ -1,5 +1,5 @@
 {
-  "comment": "Evaluation scenario pool for the planner/composer ladder. 'expect' is the anticipated route: registered (deterministic workflow, ready), needs_input (workflow matched, params missing -> HIL), composed (composer should build a valid plan from existing tools), gap (request needs capabilities the tool registry does not have yet - we WANT these to fail informatively). 'gaps' names the missing capabilities so results can be aggregated into a build list.",
+  "comment": "Evaluation scenario pool for the planner/composer ladder. 'expect' is the anticipated route: registered (deterministic workflow, ready), needs_input (workflow matched, params missing -> HIL), composed (composer should build a valid plan from existing tools), gap (request needs capabilities the tool registry does not have yet - we WANT these to fail informatively), clarification (the composer should ask a structured follow-up question rather than guess or bluntly refuse). 'gaps' names the missing capabilities so results can be aggregated into a build list.",
   "scenarios": [
     {
       "id": "S01", "lang": "tr", "difficulty": 2, "category": "registered",
@@ -180,8 +180,8 @@
       "id": "S26", "lang": "tr", "difficulty": 4, "category": "geodesy",
       "title": "Degree-based buffer trap",
       "prompt": "Kütahya'daki dereler için 0.001 derece tampon oluştur",
-      "expect": "gap", "gaps": ["degree_distance_clarification"],
-      "notes": "TRAP: distances in degrees are geodetically meaningless. Run 2 verdict: the composer REFUSES with a correct explanation (buffer_metric requires metres) - the right call. The long-term ideal is a HIL question ('0.001 deg is ~111 m at this latitude - proceed?'), tracked as the degree_distance_clarification capability."
+      "expect": "clarification", "gaps": ["degree_distance_clarification"],
+      "notes": "TRAP: distances in degrees are geodetically meaningless. Increment 3 (Composer ClarificationRequest): the composer now asks a structured clarification (e.g. 'did you mean ~111 m?') instead of bluntly refusing. Previously expect=gap/composed_refused (Run 2 verdict); the degree_distance_clarification capability has graduated from tracked gap to implemented clarification flow. Kept in gaps for historical/build-list continuity, not read by _EXPECT_OK."
     },
     {
       "id": "S27", "lang": "en", "difficulty": 4, "category": "geodesy",

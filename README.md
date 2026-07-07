@@ -16,10 +16,12 @@ Implemented:
   Pydantic v2 I/O schemas, declarative CRS/geometry preconditions, opaque
   `LayerRef` handles (geometries never cross the tool boundary; collections
   via `tuple[LayerRef, ...]` get the same guards), import-time contract
-  validation. 18 tools registered: load/save/detect_crs, reproject,
-  buffer_metric, calculate_area/length, validate/repair_geometry, filter_by_attribute,
-  fetch_osm_boundary/features, clip, intersect, difference, dissolve,
-  spatial_join, package_outputs.
+  validation. 26 tools registered: load/save (+DXF/KML)/detect_crs, reproject,
+  buffer_metric, calculate_area/length, centroid, simplify_geometry,
+  validate/repair_geometry, filter_by_attribute, fetch_osm_boundary/features,
+  clip, intersect, difference, dissolve, merge_layers, spatial_join,
+  count_points_in_polygons, nearest_neighbor_distance, voronoi_polygons,
+  grid_generation, csv_to_point_layer, package_outputs (+DXF/KML).
 - **Guarded executor** (`src/ageo/application/orchestration/executor.py`):
   the only path through which tools run. Enforces CRS, geometry-class and
   validity guards uniformly; emits typed trace events for the audit trail.
@@ -98,20 +100,31 @@ Implemented:
   echoed back (masked suffix only), and adapters read the live
   configuration on every call - no restart needed. Endpoints:
   `GET/PUT /settings/llm`, `POST /settings/llm/test`.
-- **Web UI** (`src/ageo/interface/web/static/`): the operational workbench
-  screen - left panel with the natural-language task box, "Understood"
-  summary, live process trace (SSE), needs-input question forms and output
-  list; right panel MapLibre map rendering output layers (roads, selections,
-  buffers) with fit-to-results. Vanilla JS, no build toolchain.
+- **Web UI** (`frontend/`, React + Vite + TypeScript + Tailwind v4 -
+  builds into `src/ageo/interface/web/dist`, which `app.py` serves): a
+  floating glass control panel over a full-bleed MapLibre map - the
+  natural-language task box, "Understood" summary, live process trace
+  (SSE, each event labelled with its workflow step id) with a pulsing
+  status chip while running, needs-input question forms, composed-plan
+  preview, assumptions ledger, outputs list and an EN/TR report toggle.
+  **Progressive rendering**: as each workflow step finishes, its output
+  layer fades in on the map as a pale "ghost" preview (fetched from
+  `/workspace/{layer_id}`) with the view progressively extending to cover
+  it, so steps become visible as they run instead of only at the end;
+  ghosts clear once the bold final outputs are drawn. `npm run build`
+  required once per checkout (see AGENTS.md section 4); `npm run dev`
+  for HMR iteration against a running backend.
 - **Interface layer** (`src/ageo/interface/api/`): FastAPI app.
   `POST /tasks` runs planner -> guarded runner (with `needs_input` +
   `missing_params`/structured `questions` for human-in-the-loop, and an
   `assumptions` ledger for silently-defaulted params), `GET /tasks/{id}/trace`
   and `/events` (SSE) expose the full process log, `/layers/{name}` serves
-  display-ready EPSG:4326 GeoJSON for the map panel (analysis CRS is
-  preserved in the workspace), scalar/table outputs are returned under
-  `results`, `/uploads` accepts files, `/catalog` lists workflows and tools.
-  Each task gets an isolated workspace and trace.
+  display-ready EPSG:4326 GeoJSON for a named final output layer,
+  `/workspace/{layer_id}` serves the same for ANY layer still in the
+  task's workspace (analysis CRS is preserved in the workspace either
+  way), scalar/table outputs are returned under `results`, `/uploads`
+  accepts files, `/catalog` lists workflows and tools. Each task gets an
+  isolated workspace and trace.
 
 Bundled workflows: `road_fetch_and_buffer` (the MVP scenario),
 `preflight_quality_check`, `crs_normalization` (load -> reproject ->
@@ -121,9 +134,18 @@ delivery package with manifest).
 
 ```bash
 uv sync                                             # install
-uv run pytest                                       # 142 tests, all offline
+uv run pytest                                       # 169 tests, all offline
 uv run python -m ageo.interface.api.serve           # server on :8000, real OSM
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
+```
+
+Frontend build/dev loop:
+
+```bash
+cd frontend
+npm install
+npm run build     # emits the FastAPI-served SPA into src/ageo/interface/web/dist
+npm run dev       # optional Vite dev server on :5173, proxies API calls to :8000
 ```
 
 LLM setup: paste your Google AI Studio key into `.env`:

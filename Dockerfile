@@ -1,3 +1,15 @@
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+# vite.config.ts's build.outDir points at ../src/ageo/interface/web/dist,
+# i.e. /app/src/ageo/interface/web/dist from this WORKDIR.
+RUN npm run build
+
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
@@ -9,6 +21,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
+COPY --from=frontend-builder /app/src/ageo/interface/web/dist ./src/ageo/interface/web/dist
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 

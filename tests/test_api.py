@@ -7,6 +7,7 @@ offline.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,6 +129,53 @@ def test_trace_is_a_complete_process_log(client) -> None:
         if e["phase"] == "guard_passed" and e["subject"] == "buffer_metric"
     ]
     assert buffer_guards[0]["detail"]["crs"] == "EPSG:5254"
+
+
+def test_trace_events_carry_the_workflow_step_id(client) -> None:
+    """Progressive map rendering needs to label mid-run layers by step -
+    every tool-scoped trace event from a workflow run must carry step_id."""
+    task = _run_task(client, TURKISH_COMMAND)
+    trace = client.get(f"/tasks/{task['task_id']}/trace").json()
+    tool_events = [
+        e for e in trace
+        if e["phase"] in ("tool_started", "tool_finished", "guard_passed")
+    ]
+    assert tool_events  # sanity: the workflow actually ran tools
+    assert all(e["detail"].get("step_id") for e in tool_events)
+
+
+def test_workspace_layer_endpoint_serves_intermediate_layers(client) -> None:
+    """The workspace endpoint must serve ANY layer that ever existed in the
+    task's workspace, not just a named final output - this is what lets the
+    UI preview a layer mid-run, before the workflow finishes."""
+    task = _run_task(client, TURKISH_COMMAND)
+    trace = client.get(f"/tasks/{task['task_id']}/trace").json()
+    finished = [
+        e for e in trace
+        if e["phase"] == "tool_finished" and e["subject"] == "buffer_metric"
+    ]
+    layer_id = finished[0]["detail"]["result"]["layer"]["layer_id"]
+
+    response = client.get(f"/tasks/{task['task_id']}/workspace/{layer_id}")
+    assert response.status_code == 200
+    layer = response.json()
+    assert layer["display_srid"] == "EPSG:4326"
+    assert layer["feature_count"] == 1
+
+    # Same underlying layer as the named "buffered" output.
+    named = client.get(f"/tasks/{task['task_id']}/layers/buffered").json()
+    assert layer["feature_collection"] == named["feature_collection"]
+
+
+def test_workspace_layer_endpoint_404_for_unknown_layer(client) -> None:
+    task = _run_task(client, TURKISH_COMMAND)
+    response = client.get(f"/tasks/{task['task_id']}/workspace/no_such_layer_9999")
+    assert response.status_code == 404
+
+
+def test_workspace_layer_endpoint_404_for_unknown_task(client) -> None:
+    response = client.get("/tasks/no-such-task/workspace/anything")
+    assert response.status_code == 404
 
 
 def test_needs_input_flow(client) -> None:
@@ -434,11 +482,18 @@ def test_report_endpoint_defaults_depth_from_saved_profile(client) -> None:
 
 
 def test_web_ui_is_served(client) -> None:
+    """Serve the React build when present, otherwise keep APIs testable with
+    a clear fallback message for fresh clones that have not run npm build."""
     index = client.get("/")
+    if index.status_code == 503:
+        assert "Frontend not built yet" in index.text
+        return
     assert index.status_code == 200
     assert "Autonomous GIS Workbench" in index.text
-    assert client.get("/static/app.js").status_code == 200
-    assert client.get("/static/style.css").status_code == 200
+    assert "/assets/" in index.text
+    asset_path = re.search(r'(/assets/index-[^"\']+\.js)', index.text)
+    assert asset_path, "built index.html should reference a hashed JS bundle"
+    assert client.get(asset_path.group(1)).status_code == 200
 
 
 def test_unknown_task_and_layer_return_404(client) -> None:

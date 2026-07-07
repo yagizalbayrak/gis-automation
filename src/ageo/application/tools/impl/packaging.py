@@ -30,6 +30,8 @@ _EXTENSIONS: dict[str, str] = {
     "GPKG": ".gpkg",
     "GeoJSON": ".geojson",
     "ESRI Shapefile": ".shp",
+    "DXF": ".dxf",
+    "KML": ".kml",
 }
 
 
@@ -37,7 +39,7 @@ class PackageOutputsInput(StrictModel):
     layers: tuple[LayerRef, ...] = Field(min_length=1)
     names: tuple[str, ...] = Field(min_length=1, description="One name per layer")
     directory: str = Field(min_length=1)
-    format: Literal["GPKG", "GeoJSON", "ESRI Shapefile"] = "GPKG"
+    format: Literal["GPKG", "GeoJSON", "ESRI Shapefile", "DXF", "KML"] = "GPKG"
 
     @model_validator(mode="after")
     def _names_match_layers(self) -> "PackageOutputsInput":
@@ -65,12 +67,13 @@ class PackageOutputs(Tool[PackageOutputsInput, PackageOutputsOutput]):
         name="package_outputs",
         summary="Export layers to a delivery directory with a JSON manifest "
                 "(CRS, counts, geometry types). Every layer must have a "
-                "defined CRS.",
+                "defined CRS; KML additionally requires every layer already "
+                "be in EPSG:4326.",
         input_requirements={
             "layers": InputRequirement(crs=CrsRequirement.ANY_DEFINED)
         },
         crs_effect=CrsEffect.NONE,
-        failure_modes=("write_failed",),
+        failure_modes=("write_failed", "kml_requires_wgs84"),
     )
 
     def run(self, params: PackageOutputsInput, ctx: ToolContext) -> PackageOutputsOutput:
@@ -83,6 +86,13 @@ class PackageOutputs(Tool[PackageOutputsInput, PackageOutputsOutput]):
         for ref, name in zip(params.layers, params.names):
             gdf = ctx.read(ref)
             crs = ctx.crs_of(ref)
+            if params.format == "KML" and gdf.crs.to_epsg() != 4326:
+                raise ToolExecutionError(
+                    f"kml_requires_wgs84: layer {name!r} is {gdf.crs}. KML "
+                    f"only supports EPSG:4326; insert an explicit "
+                    f"'reproject' step first rather than relying on a "
+                    f"silent GDAL reprojection."
+                )
             target = target_dir / f"{name}{extension}"
             try:
                 gdf.to_file(target, driver=params.format)

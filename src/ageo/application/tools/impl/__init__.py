@@ -6,6 +6,8 @@ from ageo.application.tools.impl import (  # noqa: F401
     aggregate,
     attributes,
     buffer,
+    csv_import,
+    geometry_ops,
     geometry_quality,
     io_vector,
     join,
@@ -14,4 +16,6 @@ from ageo.application.tools.impl import (  # noqa: F401
     overlay,
     packaging,
     reproject,
+    spatial_analysis,
+    tessellation,
 )

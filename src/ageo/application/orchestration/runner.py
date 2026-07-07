@@ -63,7 +63,9 @@ class WorkflowRunner:
                     key: self._resolve(value, resolved_params, step_outputs)
                     for key, value in step.params.items()
                 }
-                step_outputs[step.id] = self._executor.execute(step.tool, bound)
+                step_outputs[step.id] = self._executor.execute(
+                    step.tool, bound, step_id=step.id
+                )
         except AgeoError as exc:
             self._trace.emit(TraceEvent(
                 phase=TracePhase.WORKFLOW_FAILED,

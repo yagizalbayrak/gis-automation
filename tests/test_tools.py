@@ -211,3 +211,237 @@ def test_load_save_roundtrip_geopackage(executor, ctx, tmp_path) -> None:
 def test_load_vector_missing_file(executor) -> None:
     with pytest.raises(ToolExecutionError, match="file_not_found"):
         executor.execute("load_vector", {"path": "/nonexistent/file.shp"})
+
+
+def test_centroid_of_square_is_its_center(executor, ctx) -> None:
+    parcels = gpd.GeoDataFrame(
+        {"parcel_id": ["a"]},
+        geometry=[Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(parcels, name="parcels")
+
+    out = executor.execute("centroid", {"layer": ref})
+
+    result = ctx.read(out.layer)
+    assert out.feature_count == 1
+    assert result["parcel_id"].iloc[0] == "a"
+    point = result.geometry.iloc[0]
+    assert (point.x, point.y) == pytest.approx((5.0, 5.0))
+
+
+def test_simplify_geometry_reduces_vertex_count(executor, ctx) -> None:
+    wiggly = LineString([(0, 0), (1, 0.01), (2, -0.01), (3, 0.01), (10, 0)])
+    layer = gpd.GeoDataFrame(geometry=[wiggly], crs="EPSG:5254")
+    ref = ctx.write(layer, name="wiggly")
+
+    out = executor.execute(
+        "simplify_geometry", {"layer": ref, "tolerance_m": 1.0}
+    )
+
+    simplified = ctx.read(out.layer).geometry.iloc[0]
+    assert len(simplified.coords) < len(wiggly.coords)
+
+
+def test_count_points_in_polygons_attaches_per_polygon_counts(executor, ctx) -> None:
+    polygons = gpd.GeoDataFrame(
+        {"zone": ["A", "B"]},
+        geometry=[
+            Polygon([(0, 0), (10, 0), (10, 10), (0, 10)]),
+            Polygon([(20, 0), (30, 0), (30, 10), (20, 10)]),
+        ],
+        crs="EPSG:5254",
+    )
+    points = gpd.GeoDataFrame(
+        geometry=[Point(5, 5), Point(6, 6), Point(25, 5), Point(100, 100)],
+        crs="EPSG:5254",
+    )
+    poly_ref = ctx.write(polygons, name="zones")
+    point_ref = ctx.write(points, name="sites")
+
+    out = executor.execute(
+        "count_points_in_polygons", {"points": point_ref, "polygons": poly_ref}
+    )
+
+    result = ctx.read(out.layer)
+    assert out.feature_count == 2
+    assert out.total_points_matched == 3
+    counts = dict(zip(result["zone"], result["point_count"]))
+    assert counts == {"A": 2, "B": 1}
+
+
+def test_count_points_in_polygons_crs_mismatch(executor, ctx) -> None:
+    polygons = gpd.GeoDataFrame(
+        geometry=[Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])], crs="EPSG:5254"
+    )
+    points = gpd.GeoDataFrame(geometry=[Point(29.9, 39.4)], crs="EPSG:4326")
+    poly_ref = ctx.write(polygons, name="zones")
+    point_ref = ctx.write(points, name="sites")
+
+    with pytest.raises(ToolExecutionError, match="crs_mismatch"):
+        executor.execute(
+            "count_points_in_polygons", {"points": point_ref, "polygons": poly_ref}
+        )
+
+
+def test_nearest_neighbor_distance_matches_known_offsets(executor, ctx) -> None:
+    layer = gpd.GeoDataFrame(
+        geometry=[Point(0, 0), Point(100, 0)], crs="EPSG:5254"
+    )
+    other = gpd.GeoDataFrame(geometry=[Point(0, 30), Point(100, 40)], crs="EPSG:5254")
+    layer_ref = ctx.write(layer, name="sites")
+    other_ref = ctx.write(other, name="facilities")
+
+    out = executor.execute(
+        "nearest_neighbor_distance", {"layer": layer_ref, "other": other_ref}
+    )
+
+    result = ctx.read(out.layer)
+    assert out.feature_count == 2
+    assert sorted(result["nearest_distance_m"].tolist()) == pytest.approx([30.0, 40.0])
+    assert out.min_distance_m == pytest.approx(30.0)
+    assert out.max_distance_m == pytest.approx(40.0)
+
+
+def test_merge_layers_concatenates_features(executor, ctx) -> None:
+    first = gpd.GeoDataFrame(
+        {"name": ["a"]}, geometry=[Point(0, 0)], crs="EPSG:5254"
+    )
+    second = gpd.GeoDataFrame(
+        {"name": ["b"], "extra": ["x"]}, geometry=[Point(1, 1)], crs="EPSG:5254"
+    )
+    ref1 = ctx.write(first, name="first")
+    ref2 = ctx.write(second, name="second")
+
+    out = executor.execute("merge_layers", {"layers": (ref1, ref2)})
+
+    merged = ctx.read(out.layer)
+    assert out.feature_count == 2
+    assert set(merged["name"]) == {"a", "b"}
+
+
+def test_merge_layers_crs_mismatch(executor, ctx) -> None:
+    first = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:5254")
+    second = gpd.GeoDataFrame(geometry=[Point(29.9, 39.4)], crs="EPSG:4326")
+    ref1 = ctx.write(first, name="first")
+    ref2 = ctx.write(second, name="second")
+
+    with pytest.raises(ToolExecutionError, match="crs_mismatch"):
+        executor.execute("merge_layers", {"layers": (ref1, ref2)})
+
+
+def test_csv_to_point_layer_builds_points(executor, tmp_path) -> None:
+    csv_path = tmp_path / "sites.csv"
+    csv_path.write_text("name,lon,lat\nsite_a,29.98,39.42\nsite_b,29.99,39.43\n")
+
+    out = executor.execute(
+        "csv_to_point_layer",
+        {"path": str(csv_path), "x_field": "lon", "y_field": "lat"},
+    )
+
+    assert out.feature_count == 2
+    assert out.srid == "EPSG:4326"
+
+
+def test_csv_to_point_layer_missing_field(executor, tmp_path) -> None:
+    csv_path = tmp_path / "sites.csv"
+    csv_path.write_text("name,x,y\nsite_a,29.98,39.42\n")
+
+    with pytest.raises(ToolExecutionError, match="missing_field"):
+        executor.execute(
+            "csv_to_point_layer",
+            {"path": str(csv_path), "x_field": "lon", "y_field": "lat"},
+        )
+
+
+def test_csv_to_point_layer_missing_file(executor) -> None:
+    with pytest.raises(ToolExecutionError, match="file_not_found"):
+        executor.execute(
+            "csv_to_point_layer",
+            {"path": "/nonexistent/sites.csv", "x_field": "lon", "y_field": "lat"},
+        )
+
+
+def test_voronoi_polygons_covers_each_input_point(executor, ctx) -> None:
+    points = gpd.GeoDataFrame(
+        geometry=[Point(0, 0), Point(100, 0), Point(0, 100), Point(100, 100)],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(points, name="sites")
+
+    out = executor.execute("voronoi_polygons", {"layer": ref})
+
+    cells = ctx.read(out.layer)
+    assert out.feature_count == 4
+    assert (cells.geometry.geom_type == "Polygon").all()
+
+
+def test_voronoi_polygons_requires_at_least_two_points(executor, ctx) -> None:
+    points = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:5254")
+    ref = ctx.write(points, name="lonely")
+
+    with pytest.raises(ToolExecutionError, match="insufficient_points"):
+        executor.execute("voronoi_polygons", {"layer": ref})
+
+
+def test_grid_generation_covers_boundary_extent(executor, ctx) -> None:
+    boundary = gpd.GeoDataFrame(
+        geometry=[Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(boundary, name="boundary")
+
+    out = executor.execute(
+        "grid_generation",
+        {"layer": ref, "cell_size_m": 50.0, "clip_to_boundary": False},
+    )
+
+    grid = ctx.read(out.layer)
+    assert out.feature_count == 4
+    total_area = grid.geometry.area.sum()
+    assert total_area == pytest.approx(100.0 * 100.0)
+
+
+def test_grid_generation_too_many_cells_is_rejected(executor, ctx) -> None:
+    boundary = gpd.GeoDataFrame(
+        geometry=[Polygon([(0, 0), (100_000, 0), (100_000, 100_000), (0, 100_000)])],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(boundary, name="huge_boundary")
+
+    with pytest.raises(ToolExecutionError, match="too_many_cells"):
+        executor.execute(
+            "grid_generation", {"layer": ref, "cell_size_m": 1.0}
+        )
+
+
+def test_save_vector_dxf_and_kml(executor, ctx, tmp_path) -> None:
+    lines = gpd.GeoDataFrame(
+        geometry=[LineString([(480000.0, 4363000.0), (480100.0, 4363000.0)])],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(lines, name="lines")
+    dxf_path = tmp_path / "lines.dxf"
+    saved = executor.execute(
+        "save_vector", {"layer": ref, "path": str(dxf_path), "format": "DXF"}
+    )
+    assert saved.feature_count == 1
+
+    points = gpd.GeoDataFrame(geometry=[Point(29.98, 39.42)], crs="EPSG:4326")
+    point_ref = ctx.write(points, name="points_wgs84")
+    kml_path = tmp_path / "points.kml"
+    saved_kml = executor.execute(
+        "save_vector", {"layer": point_ref, "path": str(kml_path), "format": "KML"}
+    )
+    assert saved_kml.feature_count == 1
+
+
+def test_save_vector_kml_requires_wgs84(executor, ctx, tmp_path) -> None:
+    points = gpd.GeoDataFrame(geometry=[Point(480000.0, 4363000.0)], crs="EPSG:5254")
+    ref = ctx.write(points, name="points_metric")
+
+    with pytest.raises(ToolExecutionError, match="kml_requires_wgs84"):
+        executor.execute(
+            "save_vector",
+            {"layer": ref, "path": str(tmp_path / "points.kml"), "format": "KML"},
+        )

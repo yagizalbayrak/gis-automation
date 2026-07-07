@@ -15,3 +15,6 @@ evals_results
 Dockerfile
 docker-compose.yml
 .dockerignore
+frontend/node_modules
+frontend/dist
+src/ageo/interface/web/dist

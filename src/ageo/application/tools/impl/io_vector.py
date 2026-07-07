@@ -73,7 +73,7 @@ class LoadVector(Tool[LoadVectorInput, LoadVectorOutput]):
 class SaveVectorInput(StrictModel):
     layer: LayerRef
     path: str = Field(min_length=1)
-    format: Literal["GPKG", "GeoJSON", "ESRI Shapefile"] = "GPKG"
+    format: Literal["GPKG", "GeoJSON", "ESRI Shapefile", "DXF", "KML"] = "GPKG"
 
 
 class SaveVectorOutput(StrictModel):
@@ -87,17 +87,26 @@ class SaveVector(Tool[SaveVectorInput, SaveVectorOutput]):
     Output = SaveVectorOutput
     spec = ToolSpec(
         name="save_vector",
-        summary="Export a workspace layer to GeoPackage, GeoJSON or Shapefile. "
-                "Refuses to export layers without a defined CRS.",
+        summary="Export a workspace layer to GeoPackage, GeoJSON, Shapefile, "
+                "DXF or KML. Refuses to export layers without a defined CRS; "
+                "KML additionally requires the layer already be in EPSG:4326 "
+                "(GDAL would otherwise reproject silently, which this project "
+                "never allows).",
         input_requirements={
             "layer": InputRequirement(crs=CrsRequirement.ANY_DEFINED)
         },
         crs_effect=CrsEffect.NONE,
-        failure_modes=("write_failed",),
+        failure_modes=("write_failed", "kml_requires_wgs84"),
     )
 
     def run(self, params: SaveVectorInput, ctx: ToolContext) -> SaveVectorOutput:
         gdf = ctx.read(params.layer)
+        if params.format == "KML" and gdf.crs.to_epsg() != 4326:
+            raise ToolExecutionError(
+                f"kml_requires_wgs84: layer is {gdf.crs}. KML only supports "
+                f"EPSG:4326; insert an explicit 'reproject' step first "
+                f"rather than relying on a silent GDAL reprojection."
+            )
         target = Path(params.path)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -14,6 +14,13 @@
       "runtimeArgs": ["run", "python", "-m", "ageo.interface.api.serve", "--demo"],
       "port": 8000,
       "autoPort": true
+    },
+    {
+      "name": "frontend-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "dev", "--", "--port", "5173"],
+      "port": 5173,
+      "autoPort": true
     }
   ]
 }

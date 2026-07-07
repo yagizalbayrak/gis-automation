@@ -10,6 +10,9 @@ Endpoints (the operational workbench contract from the brief, section 16):
 - GET  /tasks/{id}/trace full process log (JSON)
 - GET  /tasks/{id}/events  live Server-Sent Events stream of trace events
 - GET  /tasks/{id}/layers/{name}  display-ready GeoJSON (always EPSG:4326)
+- GET  /tasks/{id}/workspace/{layer_id}  any workspace layer by its raw id
+                         (not just a named final output) - lets the UI
+                         preview intermediate results while a task runs
 - POST /uploads          file upload; returns a path usable as a workflow param
 - GET  /catalog          workflows + tools the planner can choose from
 """
@@ -21,9 +24,10 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import ageo.application.tools.impl  # noqa: F401 - registers all tools
@@ -32,6 +36,7 @@ from ageo.application.agents.planner import HybridPlanner, LlmPlannerPort
 from ageo.application.agents.reporter import ProcessReporter
 from ageo.application.rag.store import RecipeStore
 from ageo.application.tools.contract import LayerRef, OsmGateway
+from ageo.application.tools.errors import UnknownLayerError
 from ageo.application.tools.registry import registry as tool_registry
 from ageo.application.workflows.defs import register_bundled
 from ageo.application.workflows.registry import WorkflowRegistry
@@ -62,7 +67,8 @@ from ageo.interface.api.tasks import TERMINAL_STATUSES, TaskManager, TaskRecord
 
 _SSE_POLL_INTERVAL_S = 0.05
 _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
-_WEB_STATIC_DIR = Path(__file__).resolve().parent.parent / "web" / "static"
+# React SPA build (frontend/, `npm run build`), NOT checked in - see AGENTS.md.
+_WEB_DIST_DIR = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 
 def create_app(
@@ -114,11 +120,6 @@ def create_app(
     uploads.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="Autonomous GIS Workbench", version="0.1.0")
-    app.mount("/static", StaticFiles(directory=_WEB_STATIC_DIR), name="static")
-
-    @app.get("/", include_in_schema=False)
-    def index() -> FileResponse:
-        return FileResponse(_WEB_STATIC_DIR / "index.html")
 
     @app.get("/catalog")
     def catalog() -> dict:
@@ -288,21 +289,25 @@ def create_app(
         value = record.outputs.get(output_name)
         if not isinstance(value, LayerRef) or record.workspace is None:
             raise HTTPException(404, f"No layer output named {output_name!r}")
+        return _serialize_layer(record.workspace, value, output_name)
 
-        gdf = record.workspace.read(value)
-        source_crs = record.workspace.crs_of(value)
-        # Preview payloads are always served in the display CRS. This is a
-        # serialization concern only - analysis results in the workspace and
-        # exports keep their analytical CRS.
-        if source_crs is not None and source_crs.srid != "EPSG:4326":
-            gdf = gdf.to_crs("EPSG:4326")
-        return LayerResponse(
-            name=output_name,
-            source_srid=source_crs.srid if source_crs else None,
-            display_srid="EPSG:4326",
-            feature_count=len(gdf),
-            feature_collection=json.loads(gdf.to_json()),
-        )
+    @app.get(
+        "/tasks/{task_id}/workspace/{layer_id}", response_model=LayerResponse
+    )
+    def get_workspace_layer(task_id: str, layer_id: str) -> LayerResponse:
+        """Serve ANY layer still sitting in the task's workspace, not just a
+        named final output - this is what lets the UI preview intermediate
+        results (e.g. a buffer mid-workflow) while the task is still running,
+        for progressive map rendering."""
+        record = _record_or_404(manager, task_id)
+        if record.workspace is None:
+            raise HTTPException(404, f"No workspace for task {task_id!r}")
+        try:
+            return _serialize_layer(
+                record.workspace, LayerRef(layer_id=layer_id), layer_id
+            )
+        except UnknownLayerError as exc:
+            raise HTTPException(404, str(exc)) from exc
 
     @app.post("/uploads", response_model=UploadResponse)
     async def upload(file: UploadFile) -> UploadResponse:
@@ -314,6 +319,23 @@ def create_app(
             path=str(target), filename=safe_name, size_bytes=len(content)
         )
 
+    # Mounted LAST: the SPA's static assets and index.html must never shadow
+    # an API route above (Starlette matches routes in registration order).
+    # dist/ is a build artifact (frontend/, `npm run build`), not checked
+    # into git - degrade to a helpful message instead of failing app
+    # startup (and therefore every API test) when it hasn't been built yet.
+    if _WEB_DIST_DIR.is_dir():
+        app.mount("/", StaticFiles(directory=_WEB_DIST_DIR, html=True), name="spa")
+    else:
+
+        @app.get("/", include_in_schema=False)
+        def _frontend_not_built() -> PlainTextResponse:
+            return PlainTextResponse(
+                "Frontend not built yet. Run: cd frontend && npm install && "
+                "npm run build",
+                status_code=503,
+            )
+
     return app
 
 
@@ -322,6 +344,23 @@ def _record_or_404(manager: TaskManager, task_id: str) -> TaskRecord:
     if record is None:
         raise HTTPException(404, f"Unknown task: {task_id!r}")
     return record
+
+
+def _serialize_layer(workspace: Any, ref: LayerRef, name: str) -> LayerResponse:
+    """Preview payloads are always served in the display CRS (EPSG:4326).
+    This is a serialization concern only - analysis results in the
+    workspace and exports keep their analytical CRS."""
+    gdf = workspace.read(ref)
+    source_crs = workspace.crs_of(ref)
+    if source_crs is not None and source_crs.srid != "EPSG:4326":
+        gdf = gdf.to_crs("EPSG:4326")
+    return LayerResponse(
+        name=name,
+        source_srid=source_crs.srid if source_crs else None,
+        display_srid="EPSG:4326",
+        feature_count=len(gdf),
+        feature_collection=json.loads(gdf.to_json()),
+    )
 
 
 def _brief_error(exc: Exception) -> str:

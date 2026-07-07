@@ -5,17 +5,36 @@
 > "Milestone log" and refresh "Current state" + "Next steps" before ending
 > the session. Rules and architecture live in [AGENTS.md](AGENTS.md) - do
 > not duplicate them here; this file records STATE and HISTORY.
-> Last updated: 2026-07-05 by Claude Code.
+> Last updated: 2026-07-07 by Codex.
 
 ## Current state (the short version)
 
 - **Product**: Autonomous GIS Workbench (`ageo`) - natural-language TR/EN
   geospatial automation. Brief: `PROJECT_BRIEF_FABLE5.md`.
-- **Tests**: 142/142 green, all offline (`uv run pytest`, ~2 s).
+- **Tests**: 169/169 green, all offline (`uv run pytest`, ~2 s).
+- **Web UI: React rewrite DONE** (owner-requested: "make it visually much
+  better, React, your call on design") - see milestone 16. `frontend/`
+  (Vite + TypeScript + Tailwind v4 + MapLibre GL + motion) replaces the
+  vanilla-JS `web/static/`; full feature parity, own visual design (not
+  a copy of any reference product). Requires `cd frontend && npm install
+  && npm run build` once per checkout (gitignored build output at
+  `src/ageo/interface/web/dist`); the app degrades to a 503 at "/" without
+  it (every other endpoint keeps working, `uv run pytest` never depends
+  on the build). **Docker build with the new frontend-builder stage was
+  NOT verified this session** (no Docker daemon available) - next session
+  should run it once.
+- **Tool registry**: 26 tools. All Tier-1 tools from the eval build list
+  (evals_results/FINDINGS.md) are now registered - see milestone 14.
+- **Progressive map rendering: DONE** (owner-requested, previously owed) -
+  see milestone 15 (built against the vanilla UI) and milestone 16 (ported
+  to the React UI, re-verified). Browser-verified with zero console
+  errors: intermediate layers now fade in on the map as each workflow step
+  finishes, instead of only at the end.
 - **Runs**: `uv run python -m ageo.interface.api.serve` (real OSM) or
   `--demo` (offline synthetic Kutahya). Web UI at `/` on :8000
   (respects `PORT`; bind host via `AGEO_HOST`, default 127.0.0.1).
-  Preview configs in `.claude/launch.json`. Docker: `docker compose up
+  Preview configs in `.claude/launch.json` (`ageo`, `ageo-demo`,
+  `frontend-dev` for Vite HMR). Docker: `docker compose up
   --build ageo` (:8000) or `--profile demo up ageo-demo` (:8001) for
   colleagues cloning the repo.
 - **LLM**: user's own **Gemini 2.5 Flash** key, configured via the UI
@@ -30,14 +49,15 @@
   pool, Gemini 2.5 Flash - 49/50 behave as intended; 27 plans composed
   first-try (max 13 steps); 19 honest refusals naming missing
   capabilities; all geodetic trap scenarios dodged.
-- **Tier-1 tool progress**: `calculate_area` and `calculate_length` are now
-  registered. They require projected metric polygon/line layers, support
-  m2/ha and m/km respectively, and return measured layers plus compact
-  table/total outputs. API responses keep map layers in `outputs` and expose
-  scalar/table outputs in `results`. S33/S34-shaped composed plans are
-  covered offline with the demo gateway. Live evals still need explicit user
-  approval because they send prompt and tool-catalog context to the
-  configured external LLM.
+- **Tier-1 tool progress**: COMPLETE. `calculate_area`/`calculate_length`
+  (milestone 9) plus, as of milestone 14, `centroid`, `simplify_geometry`,
+  `count_points_in_polygons`, `nearest_neighbor_distance`, `merge_layers`,
+  `csv_to_point_layer`, `voronoi_polygons`, `grid_generation`, and DXF/KML
+  export in `save_vector`/`package_outputs`. Every gap named in
+  evals_results/FINDINGS.md's Tier-1 build list is now built. S33/S34/S43-
+  S50-shaped composed plans are covered offline with the demo gateway; live
+  evals still need explicit user approval because they send prompt and
+  tool-catalog context to the configured external LLM.
 - Parallel Codex checkout exists at `~/Desktop/gis-automation-v2-codex`
   (server seen on :8001). Keep the two trees in sync deliberately - they
   do NOT share state.
@@ -74,7 +94,7 @@ PlanComposer (one strong call composing a NEW WorkflowSpec-shaped JSON
 plan). Every plan - bundled or composed - must pass `validate_workflow()`
 (structure + static CRS-coherence simulation), then executes step-by-step
 through the guarded `ToolExecutor` (CRS/geometry guards, trace events).
-18 deterministic tools; geometries never enter LLM context (LayerRef
+26 deterministic tools; geometries never enter LLM context (LayerRef
 handles); per-task isolated workspace + trace; deterministic EN/TR
 Reporter. Full map in AGENTS.md section 3.
 
@@ -173,6 +193,112 @@ Reporter. Full map in AGENTS.md section 3.
     metric distance with 111m recommended (correct conversion) plus two
     alternative options, clean EN+TR text. Result in
     `evals_results/20260705_230859.json`.
+14. **Remaining Tier-1 tools** - registered all 8 tools still open on
+    evals_results/FINDINGS.md's build list: `centroid`/`simplify_geometry`
+    (`geometry_ops.py`), `count_points_in_polygons`/
+    `nearest_neighbor_distance` (`spatial_analysis.py`),
+    `voronoi_polygons`/`grid_generation` (`tessellation.py`, square cells
+    only - S46's "hex-grid" title is not literally satisfied),
+    `merge_layers` (added to `aggregate.py`), `csv_to_point_layer`
+    (`csv_import.py`, `crs_effect=FROM_PARAM` on the `srid` field), and
+    DXF/KML added to `save_vector`'s and `package_outputs`' format enum.
+    All geometry-deriving tools (centroid, simplify, voronoi, grid) require
+    a projected metric CRS, matching the buffer/area/length precedent -
+    geographic-degree tessellation would be geodetically distorted the
+    same way a degree-based buffer is. One notable decision: KML export
+    now REFUSES a non-EPSG:4326 layer (`kml_requires_wgs84`) instead of
+    letting GDAL silently reproject, which was verified to happen
+    otherwise - preserves the "CRS guard never auto-reprojects" rule for a
+    format-level reprojection nobody asked for. 23 new tests (9 tool files'
+    worth of unit + guard tests, plus 2 offline composed-plan tests
+    exercising `centroid` and `count_points_in_polygons` through the full
+    composer -> validator -> runner pipeline with the demo OSM gateway)
+    (165 tests). Tier-1 build list is now fully closed; live-LLM re-run of
+    S43-S50 to flip their `scenarios.json` `expect` fields is the next
+    approval-gated step (see "Next steps").
+15. **Progressive map rendering** - the owner-requested "steps appear
+    smoothly on the map as they run" feature, implemented per the sketch in
+    AGENTS.md section 8: `ToolExecutor.execute()` and `WorkflowRunner.run_spec()`
+    now thread a `step_id` through so every `tool_started`/`guard_*`/
+    `tool_finished`/`tool_failed` trace event carries which workflow step
+    produced it (`orchestration/executor.py`, `orchestration/runner.py`);
+    a new `GET /tasks/{id}/workspace/{layer_id}` endpoint
+    (`interface/api/app.py`) serves display-CRS GeoJSON for ANY layer still
+    in the task's workspace, not just a named final output, with the
+    serializer refactored out of the existing `/layers/{name}` endpoint
+    into a shared `_serialize_layer()` helper. In `app.js`: on every
+    `tool_finished` SSE event (skipping `reproject`/`detect_crs`/
+    `validate_geometry`/`save_vector`/`package_outputs` - CRS bookkeeping
+    and exports, not visual progress), the produced layer(s) are fetched
+    from the new endpoint and drawn as pale "ghost" layers that fade in via
+    MapLibre's paint-property transitions, with the map bounds extending
+    progressively as each ghost lands; the status chip now pulses via CSS
+    while `status === "running"`. One race condition was caught and fixed
+    during browser verification: an in-flight ghost fetch could resolve
+    *after* the task finished and `clearGhostLayers()` had already run,
+    leaving a stray ghost source behind - fixed with a `state.ghostGeneration`
+    counter that `clearGhostLayers()` bumps and every async ghost fetch
+    checks before drawing, so a late-arriving ghost from a finished (or
+    superseded) task generation is silently dropped instead of leaking.
+    4 new backend tests (step_id present on every tool-scoped trace event;
+    the workspace endpoint serves the same content as the named-output
+    endpoint for the same underlying layer; 404s for an unknown layer id
+    and an unknown task id) (169 tests). **Browser-verified in `--demo`
+    mode** for both a single-step deterministic workflow and the 7-step
+    composed rental scenario: network trace confirmed ghost fetches fired
+    for every non-skipped step in order, the skip list correctly suppressed
+    `reproject` steps, zero stray ghost sources remained after either run
+    finished, and zero console errors throughout.
+16. **React frontend rewrite** - owner asked for the web UI to be "visually
+    much better," React-based, explicitly not a copy of any specific
+    reference product, with full design latitude delegated to the agent.
+    New `frontend/` project: Vite + React 19 + TypeScript + Tailwind v4 +
+    MapLibre GL (wrapped directly, no react-map-gl) + `motion` (animation)
+    + `lucide-react` (icons) + bundled `@fontsource-variable/inter`.
+    Design direction: a floating glassmorphic control panel over a
+    full-bleed map (amber/cyan accent duality, animated cards, pulsing
+    status ring), replacing the old fixed two-column vanilla layout.
+    Full feature parity with the vanilla UI it replaces: task input +
+    example chips, live SSE trace with step-id badges (`TraceCard`),
+    understood/plan/assumptions/questions/error cards, outputs list,
+    EN/TR report toggle, LLM settings panel (provider/model/key, auto-save-
+    before-test preserved), and the full progressive ghost-layer rendering
+    from milestone 15 (ported into `MapView.tsx`). `app.py` now serves the
+    built SPA (`src/ageo/interface/web/dist`, gitignored) mounted LAST so
+    it never shadows an API route, with a graceful 503 fallback ("frontend
+    not built yet") instead of crashing app startup when the build is
+    missing - keeps `uv run pytest` decoupled from the npm toolchain.
+    Dockerfile gained a `frontend-builder` (Node) stage that runs before
+    the Python build stage. Old `src/ageo/interface/web/static/` deleted
+    outright (not deprecated in place). `test_web_ui_is_served` rewritten
+    to check for the hashed `/assets/index-*.js` bundle instead of the old
+    fixed `app.js`/`style.css` paths (169 tests, unchanged count - this
+    was a rewrite of one existing test, not a net addition).
+    **Two real bugs caught and fixed during browser verification** (both
+    now documented in AGENTS.md section 6 pitfalls):
+    - `maplibre-gl.css`'s `.maplibregl-map { position: relative }` cascade
+      silently overrode Tailwind's `.absolute` utility on the map
+      container (equal specificity, later stylesheet wins), collapsing
+      the map to 0 height. Fixed with an inline `style` (always wins).
+    - `motion`'s `height: "auto"` animation on the Settings panel's
+      collapse/expand got stuck at `height: 0` and never resolved,
+      making the panel invisible despite `open=true`. Fixed by animating
+      `opacity`/`y` instead and dropping the height animation entirely.
+    **Browser-verified against the production build served through
+    FastAPI** (`ageo-demo`, zero real LLM tokens): deterministic buffer
+    workflow, the 7-step composed rental scenario (polygon fill + point
+    halo rendering confirmed visually), the LLM settings panel (provider/
+    model/masked-key display), and the full needs_input -> fill answer ->
+    resubmit -> succeeded round-trip - all with zero console errors.
+    **Not verified**: the Docker image build (no Docker daemon available
+    in the session sandbox) - see "Next steps".
+17. **Mainline React import** - moved Claude's `.claude/worktrees/
+    laughing-raman-f41055` React/progressive-rendering work into the main
+    checkout without `node_modules`, `dist`, `.venv`, or `__pycache__`;
+    kept the SPA build output gitignored, adjusted the web UI smoke test
+    to accept the intentional 503 fallback on fresh clones, and verified
+    the imported main tree with `npm --prefix frontend run build`,
+    `uv run pytest`, and a FastAPI-served browser smoke test (169 tests).
 
 ## Key decisions (and why)
 
@@ -206,17 +332,20 @@ Reporter. Full map in AGENTS.md section 3.
 
 ## Next steps (agreed order)
 
-1. **Continue Tier-1 tools** from evals_results/FINDINGS.md: centroid,
-   simplify_geometry, count_points_in_polygons
-   /aggregate, nearest_neighbor_distance, merge_layers, csv_to_point_layer,
-   DXF+KML in save_vector, voronoi, grid_generation. After EACH tool,
-   re-run its gap scenarios (`uv run python -m ageo.evals --only S43 ...`)
-   - the refused->composed flip is the progress metric. Live evals require
-   explicit approval because they send prompt/catalog context to the
-   configured external LLM.
-2. **Progressive map rendering** (explicitly requested by owner, still
-   owed): workspace-layer endpoint + step ids in trace + ghost layers with
-   fade-in during execution. Implementation sketch in AGENTS.md section 8.
+1. **Verify the Docker build** (milestone 16): `docker compose up --build
+   ageo-demo`, confirm the built React UI is actually reachable at
+   `http://localhost:8001/` from inside the image (not just via the local
+   `frontend-dev`/`ageo-demo` preview configs, which is all that could be
+   tested this session - no Docker daemon was running in the sandbox).
+2. **Live-verify the 8 new Tier-1 tools** (milestone 14): re-run
+   `uv run python -m ageo.evals --only S43 S44 S45 S46 S48 S49 S50` against
+   the real Gemini key - **needs explicit user approval**, it spends real
+   tokens - then flip each scenario's `expect` in `scenarios.json` from
+   `gap` to `composed` (or `clarification`) and update FINDINGS.md's
+   scoreboard for whichever flip. Two named gaps deliberately remain open
+   after this: bulk `geocoding` (S42, Nominatim rate limits) and
+   `batch_folder_processing` (S48 - folder-wide merge needs Phase 3 below,
+   `merge_layers` alone only handles pre-loaded layers, not a folder scan).
 3. First real composer flight in the browser UI with the user's Gemini key
    (eval ran headless; UI path untested with live LLM). A Settings UI tab
    for the profile is a smaller, related companion task.

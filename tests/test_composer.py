@@ -242,6 +242,116 @@ def test_composed_length_statistics_plan_validates_and_executes(
     assert len(outputs["length_table"]) == len(cycleways)
 
 
+def test_composed_park_centroid_plan_validates_and_executes(
+    composer_factory, runner, ctx
+) -> None:
+    """Tier-1 gap S43: 'where is the center of each park'."""
+    plan = {
+        "name": "kutahya_park_centroids",
+        "summary": "Find the centroid of each Kutahya park.",
+        "steps": [
+            {
+                "id": "boundary",
+                "tool": "fetch_osm_boundary",
+                "params": {"place_name": "Kutahya, Turkey"},
+            },
+            {
+                "id": "parks",
+                "tool": "fetch_osm_features",
+                "params": {
+                    "boundary": "$steps.boundary.layer",
+                    "key": "leisure",
+                    "value": "park",
+                },
+            },
+            {
+                "id": "parks_metric",
+                "tool": "reproject",
+                "params": {"layer": "$steps.parks.layer", "target_srid": "EPSG:5254"},
+            },
+            {
+                "id": "centroids",
+                "tool": "centroid",
+                "params": {"layer": "$steps.parks_metric.layer"},
+            },
+        ],
+        "outputs": {"park_centroids": "$steps.centroids.layer"},
+    }
+    composer, _ = composer_factory(plan)
+
+    composed = composer.compose("Kutahya'daki her parkin merkezini bul")
+    outputs = runner.run_spec(composed.spec, {})
+
+    centroids = ctx.read(outputs["park_centroids"])
+    assert len(centroids) == 2
+    assert (centroids.geometry.geom_type == "Point").all()
+
+
+def test_composed_school_count_per_park_plan_validates_and_executes(
+    composer_factory, runner, ctx
+) -> None:
+    """Tier-1 gap S35/S46: how many schools fall inside each park."""
+    plan = {
+        "name": "kutahya_schools_per_park",
+        "summary": "Count schools inside each Kutahya park.",
+        "steps": [
+            {
+                "id": "boundary",
+                "tool": "fetch_osm_boundary",
+                "params": {"place_name": "Kutahya, Turkey"},
+            },
+            {
+                "id": "schools",
+                "tool": "fetch_osm_features",
+                "params": {
+                    "boundary": "$steps.boundary.layer",
+                    "key": "amenity",
+                    "value": "school",
+                },
+            },
+            {
+                "id": "parks",
+                "tool": "fetch_osm_features",
+                "params": {
+                    "boundary": "$steps.boundary.layer",
+                    "key": "leisure",
+                    "value": "park",
+                },
+            },
+            {
+                "id": "schools_metric",
+                "tool": "reproject",
+                "params": {"layer": "$steps.schools.layer", "target_srid": "EPSG:5254"},
+            },
+            {
+                "id": "parks_metric",
+                "tool": "reproject",
+                "params": {"layer": "$steps.parks.layer", "target_srid": "EPSG:5254"},
+            },
+            {
+                "id": "counts",
+                "tool": "count_points_in_polygons",
+                "params": {
+                    "points": "$steps.schools_metric.layer",
+                    "polygons": "$steps.parks_metric.layer",
+                },
+            },
+        ],
+        "outputs": {"parks_with_school_counts": "$steps.counts.layer"},
+    }
+    composer, _ = composer_factory(plan)
+
+    composed = composer.compose("Kutahya'daki her parkin icinde kac okul var?")
+    outputs = runner.run_spec(composed.spec, {})
+
+    parks = ctx.read(outputs["parks_with_school_counts"])
+    assert len(parks) == 2
+    assert "point_count" in parks.columns
+    # The demo school sits outside both park polygons - a real 0 count,
+    # not a placeholder, is the correct answer here.
+    assert int(parks["point_count"].sum()) == 0
+
+
 def test_recipe_store_matches_turkish_and_english(crs_info) -> None:
     store = RecipeStore()
     turkish = store.search("okula yakin kiralik ev icin uygun alan bul")

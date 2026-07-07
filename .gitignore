@@ -4,3 +4,9 @@
 .venv/
 evals_results/*.json
 
+# Frontend (frontend/, React+Vite): build output and deps are generated,
+# never committed. `npm run build` regenerates src/ageo/interface/web/dist.
+frontend/node_modules/
+frontend/dist/
+src/ageo/interface/web/dist/
+

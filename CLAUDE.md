@@ -19,16 +19,22 @@ Read these two files before doing anything:
 - End of any significant milestone: update HANDOFF.md (milestone log,
   current state, next steps) so the next session - either model - can
   resume seamlessly. Update README.md feature status too.
-- `uv run pytest` must be green before and after your work (142 tests,
+- `uv run pytest` must be green before and after your work (169 tests,
   offline, ~2 s). Never add tests that hit the network or spend tokens.
 - UI-visible changes: verify in the browser (preview config `ageo` =
-  real OSM, `ageo-demo` = offline) and check the console for errors.
+  real OSM, `ageo-demo` = offline, `frontend-dev` = Vite dev server on
+  :5173 proxying to one of the above) and check the console for errors.
+  The built React UI lives at `/` via `src/ageo/interface/web/dist` -
+  run `cd frontend && npm run build` after UI changes before verifying
+  through the `ageo`/`ageo-demo` server (the dev server auto-reflects
+  source edits without a build).
 
 ## Quick facts
 
 - Python 3.12+/uv, FastAPI + Pydantic v2 strict, GeoPandas/Shapely 2/
   pyproj, LiteLLM (user's Gemini 2.5 Flash key via UI Settings panel),
-  MapLibre vanilla-JS UI. English-only code/comments; TR+EN user-facing.
+  React + Vite + TypeScript + Tailwind v4 SPA (`frontend/`) with MapLibre
+  GL. English-only code/comments; TR+EN user-facing.
 - Evaluation harness: `uv run python -m ageo.evals` (50 scenarios;
   baseline and tool build list in evals_results/FINDINGS.md).
 - The user delegates design decisions: make the expert call, state it,

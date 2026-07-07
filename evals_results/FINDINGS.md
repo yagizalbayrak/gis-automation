@@ -42,16 +42,27 @@ degree-based buffer with a correct geodetic explanation instead of guessing).
 
 ## Tool build list (harvested from refusals, ordered by effort/value)
 
+**Status (2026-07-07): Tier 1 is fully built.** All items below are
+registered tools with offline unit + guard tests (see
+`src/ageo/application/tools/impl/geometry_ops.py`, `spatial_analysis.py`,
+`tessellation.py`, `aggregate.py`, `csv_import.py`, `io_vector.py`,
+`packaging.py`). `grid_generation` produces a square grid only - S46's
+"hex-grid" title is not literally satisfied. Live-LLM re-run of S43-S50
+to flip the scoreboard below is still pending explicit user approval
+(see HANDOFF.md "Next steps").
+
 **Tier 1 - trivial GeoPandas/Shapely wrappers, high demand:**
 - `calculate_area` (S33), `calculate_length` (S34) - also need scalar/table
-  outputs, not just layers
-- `centroid` (S43), `simplify_geometry` (S44, metric-CRS tolerance)
-- `count_points_in_polygons` / group-aggregate (S35, S46)
-- `nearest_neighbor_distance` via sjoin_nearest (S36)
-- `merge_layers` (S48), `csv_to_point_layer` (S30, in the brief)
+  outputs, not just layers - DONE
+- `centroid` (S43), `simplify_geometry` (S44, metric-CRS tolerance) - DONE
+- `count_points_in_polygons` / group-aggregate (S35, S46) - DONE
+- `nearest_neighbor_distance` via sjoin_nearest (S36) - DONE
+- `merge_layers` (S48), `csv_to_point_layer` (S30, in the brief) - DONE
 - DXF + KML drivers in `save_vector` (S49, S50 - both in the brief's
-  output-format list)
-- `voronoi` (S45), `grid_generation` (S46)
+  output-format list) - DONE (KML additionally refuses non-EPSG:4326
+  layers rather than let GDAL reproject silently)
+- `voronoi` (S45, as `voronoi_polygons`), `grid_generation` (S46, square
+  cells only) - DONE
 
 **Tier 2 - new adapters/design work:**
 - bulk `geocoding` (S42; Nominatim rate limits!)

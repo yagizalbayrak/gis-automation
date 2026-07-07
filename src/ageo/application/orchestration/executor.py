@@ -48,26 +48,38 @@ class ToolExecutor:
         self._ctx = ctx
         self._trace = trace
 
-    def execute(self, tool_name: str, params: dict[str, Any] | StrictModel) -> StrictModel:
+    def execute(
+        self,
+        tool_name: str,
+        params: dict[str, Any] | StrictModel,
+        step_id: str | None = None,
+    ) -> StrictModel:
         tool = self._registry.get(tool_name)
         payload = params.model_dump() if isinstance(params, StrictModel) else params
         inp = tool.Input.model_validate(payload)
 
-        self._emit(TracePhase.TOOL_STARTED, tool_name, {"params": _loggable(inp)})
+        self._emit(
+            TracePhase.TOOL_STARTED, tool_name,
+            {"params": _loggable(inp)}, step_id,
+        )
 
         for field_name, requirement in tool.spec.input_requirements.items():
             value = getattr(inp, field_name)
             refs = value if isinstance(value, tuple) else (value,)
             for ref in refs:
-                self._guard(tool_name, field_name, ref, requirement)
+                self._guard(tool_name, field_name, ref, requirement, step_id)
 
         try:
             out = tool.run(inp, self._ctx)
         except ToolExecutionError as exc:
-            self._emit(TracePhase.TOOL_FAILED, tool_name, {"error": str(exc)})
+            self._emit(
+                TracePhase.TOOL_FAILED, tool_name, {"error": str(exc)}, step_id
+            )
             raise
         out = tool.Output.model_validate(out.model_dump())
-        self._emit(TracePhase.TOOL_FINISHED, tool_name, {"result": _loggable(out)})
+        self._emit(
+            TracePhase.TOOL_FINISHED, tool_name, {"result": _loggable(out)}, step_id
+        )
         return out
 
     def _guard(
@@ -76,6 +88,7 @@ class ToolExecutor:
         field_name: str,
         ref: LayerRef,
         requirement: InputRequirement,
+        step_id: str | None,
     ) -> None:
         crs = self._ctx.crs_of(ref)
         violation = check_crs(requirement.crs, crs)
@@ -84,6 +97,7 @@ class ToolExecutor:
                 TracePhase.GUARD_FAILED,
                 tool_name,
                 {"input": field_name, "kind": "crs", "message": violation},
+                step_id,
             )
             raise CrsGuardViolation(f"{tool_name}.{field_name}: {violation}")
 
@@ -94,6 +108,7 @@ class ToolExecutor:
                 TracePhase.GUARD_FAILED,
                 tool_name,
                 {"input": field_name, "kind": "geometry", "message": geometry_violation},
+                step_id,
             )
             raise GeometryGuardViolation(
                 f"{tool_name}.{field_name}: {geometry_violation}"
@@ -103,9 +118,18 @@ class ToolExecutor:
             TracePhase.GUARD_PASSED,
             tool_name,
             {"input": field_name, "crs": crs.srid if crs else None},
+            step_id,
         )
 
-    def _emit(self, phase: TracePhase, subject: str, detail: dict[str, Any]) -> None:
+    def _emit(
+        self,
+        phase: TracePhase,
+        subject: str,
+        detail: dict[str, Any],
+        step_id: str | None = None,
+    ) -> None:
+        if step_id is not None:
+            detail = {**detail, "step_id": step_id}
         self._trace.emit(TraceEvent(phase=phase, subject=subject, detail=detail))
 
 

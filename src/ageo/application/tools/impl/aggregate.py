@@ -1,5 +1,9 @@
-"""Aggregation tools: dissolve."""
+"""Aggregation tools: dissolve, merge_layers."""
 from __future__ import annotations
+
+import geopandas as gpd
+import pandas as pd
+from pydantic import Field
 
 from ageo.application.tools.contract import (
     LayerRef,
@@ -50,3 +54,43 @@ class Dissolve(Tool[DissolveInput, DissolveOutput]):
             dissolved = dissolved.reset_index()
         ref = ctx.write(dissolved, name="dissolved")
         return DissolveOutput(layer=ref, feature_count=len(dissolved))
+
+
+class MergeLayersInput(StrictModel):
+    layers: tuple[LayerRef, ...] = Field(min_length=2)
+
+
+class MergeLayersOutput(StrictModel):
+    layer: LayerRef
+    feature_count: int
+
+
+@registry.register
+class MergeLayers(Tool[MergeLayersInput, MergeLayersOutput]):
+    Input = MergeLayersInput
+    Output = MergeLayersOutput
+    spec = ToolSpec(
+        name="merge_layers",
+        summary="Concatenate two or more layers into one (attribute union, "
+                "missing fields become null). All layers must share the "
+                "same CRS.",
+        input_requirements={
+            "layers": InputRequirement(crs=CrsRequirement.ANY_DEFINED)
+        },
+        failure_modes=("crs_mismatch",),
+    )
+
+    def run(self, params: MergeLayersInput, ctx: ToolContext) -> MergeLayersOutput:
+        gdfs = [ctx.read(ref) for ref in params.layers]
+        first_crs = gdfs[0].crs
+        for position, gdf in enumerate(gdfs[1:], start=2):
+            if gdf.crs != first_crs:
+                raise ToolExecutionError(
+                    f"crs_mismatch: layer 1 is {first_crs} but layer "
+                    f"{position} is {gdf.crs}. Reproject to a common CRS first."
+                )
+        merged = gpd.GeoDataFrame(
+            pd.concat(gdfs, ignore_index=True), crs=first_crs
+        )
+        ref = ctx.write(merged, name="merged")
+        return MergeLayersOutput(layer=ref, feature_count=len(merged))

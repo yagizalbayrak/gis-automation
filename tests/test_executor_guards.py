@@ -127,3 +127,62 @@ def test_undefined_crs_blocks_metric_operations(executor, ctx) -> None:
 
     with pytest.raises(CrsGuardViolation, match="no resolvable CRS"):
         executor.execute("buffer_metric", {"layer": ref, "distance_m": 5.0})
+
+
+def test_centroid_in_epsg4326_is_structurally_impossible(executor, ctx) -> None:
+    parcel = gpd.GeoDataFrame(
+        geometry=[
+            Polygon([(29.95, 39.42), (29.96, 39.42), (29.96, 39.43), (29.95, 39.43)])
+        ],
+        crs="EPSG:4326",
+    )
+    ref = ctx.write(parcel, name="parcel_4326")
+
+    with pytest.raises(CrsGuardViolation, match="EPSG:4326"):
+        executor.execute("centroid", {"layer": ref})
+
+
+def test_simplify_geometry_in_epsg4326_is_structurally_impossible(executor, ctx) -> None:
+    roads = gpd.GeoDataFrame(
+        geometry=[LineString([(29.95, 39.42), (29.99, 39.43)])], crs="EPSG:4326"
+    )
+    ref = ctx.write(roads, name="roads_4326")
+
+    with pytest.raises(CrsGuardViolation, match="EPSG:4326"):
+        executor.execute(
+            "simplify_geometry", {"layer": ref, "tolerance_m": 1.0}
+        )
+
+
+def test_nearest_neighbor_distance_in_epsg4326_is_structurally_impossible(
+    executor, ctx
+) -> None:
+    layer = gpd.GeoDataFrame(geometry=[Point(29.95, 39.42)], crs="EPSG:4326")
+    other = gpd.GeoDataFrame(geometry=[Point(29.96, 39.43)], crs="EPSG:4326")
+    layer_ref = ctx.write(layer, name="sites_4326")
+    other_ref = ctx.write(other, name="facilities_4326")
+
+    with pytest.raises(CrsGuardViolation, match="EPSG:4326"):
+        executor.execute(
+            "nearest_neighbor_distance", {"layer": layer_ref, "other": other_ref}
+        )
+
+
+def test_voronoi_polygons_rejects_non_point_layers(executor, ctx) -> None:
+    lines = gpd.GeoDataFrame(
+        geometry=[LineString([(0, 0), (10, 0)])], crs="EPSG:5254"
+    )
+    ref = ctx.write(lines, name="lines")
+
+    with pytest.raises(GeometryGuardViolation, match="point"):
+        executor.execute("voronoi_polygons", {"layer": ref})
+
+
+def test_grid_generation_rejects_non_polygon_layers(executor, ctx) -> None:
+    points = gpd.GeoDataFrame(geometry=[Point(0, 0)], crs="EPSG:5254")
+    ref = ctx.write(points, name="points")
+
+    with pytest.raises(GeometryGuardViolation, match="polygon"):
+        executor.execute(
+            "grid_generation", {"layer": ref, "cell_size_m": 10.0}
+        )

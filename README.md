@@ -16,12 +16,12 @@ Implemented:
   Pydantic v2 I/O schemas, declarative CRS/geometry preconditions, opaque
   `LayerRef` handles (geometries never cross the tool boundary; collections
   via `tuple[LayerRef, ...]` get the same guards), import-time contract
-  validation. 26 tools registered: load/save (+DXF/KML)/detect_crs, reproject,
+  validation. 27 tools registered: load/save (+DXF/KML)/detect_crs, reproject,
   buffer_metric, calculate_area/length, centroid, simplify_geometry,
   validate/repair_geometry, filter_by_attribute, fetch_osm_boundary/features,
   clip, intersect, difference, dissolve, merge_layers, spatial_join,
-  count_points_in_polygons, nearest_neighbor_distance, voronoi_polygons,
-  grid_generation, csv_to_point_layer, package_outputs (+DXF/KML).
+  count_points_in_polygons, nearest_neighbor_distance, score_candidates,
+  voronoi_polygons, grid_generation, csv_to_point_layer, package_outputs (+DXF/KML).
 - **Guarded executor** (`src/ageo/application/orchestration/executor.py`):
   the only path through which tools run. Enforces CRS, geometry-class and
   validity guards uniformly; emits typed trace events for the audit trail.
@@ -33,7 +33,8 @@ Implemented:
   `srid_metric` contract (refuses non-metric target CRS at start time).
 - **Infrastructure** (`src/ageo/infrastructure/gis/`): pyproj-backed CRS
   facts + location-aware metric CRS advisor (TUREF TM zones in Turkey, UTM
-  elsewhere), in-memory workspace, Overpass/Nominatim OSM gateway.
+  elsewhere), in-memory workspace, Overpass/Nominatim OSM gateway with
+  real node/way/relation geometry parsing.
 
 - **Planner agents** (`src/ageo/application/agents/planner.py`):
   `DeterministicPlanner` matches natural language (Turkish-diacritics-aware)
@@ -134,7 +135,7 @@ delivery package with manifest).
 
 ```bash
 uv sync                                             # install
-uv run pytest                                       # 169 tests, all offline
+uv run pytest                                       # 178 tests, all offline
 uv run python -m ageo.interface.api.serve           # server on :8000, real OSM
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
 ```

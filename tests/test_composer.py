@@ -352,6 +352,138 @@ def test_composed_school_count_per_park_plan_validates_and_executes(
     assert int(parks["point_count"].sum()) == 0
 
 
+def test_composed_scored_site_analysis_plan_validates_and_executes(
+    composer_factory, runner, ctx
+) -> None:
+    """Site analysis increment: proximity constraints produce candidates;
+    deterministic scoring then ranks them by area and nearest distances."""
+    plan = {
+        "name": "scored_rental_site_analysis",
+        "summary": "Find and rank rental candidate areas near schools and main roads.",
+        "steps": [
+            {
+                "id": "neighborhood",
+                "tool": "fetch_osm_boundary",
+                "params": {"place_name": "Evliya Celebi Mahallesi, Kutahya"},
+            },
+            {
+                "id": "schools",
+                "tool": "fetch_osm_features",
+                "params": {
+                    "boundary": "$steps.neighborhood.layer",
+                    "key": "amenity",
+                    "value": "school",
+                },
+            },
+            {
+                "id": "roads",
+                "tool": "fetch_osm_features",
+                "params": {"boundary": "$steps.neighborhood.layer", "key": "highway"},
+            },
+            {
+                "id": "main_roads",
+                "tool": "filter_by_attribute",
+                "params": {
+                    "layer": "$steps.roads.layer",
+                    "field": "highway",
+                    "in_values": ["primary", "secondary", "trunk"],
+                },
+            },
+            {
+                "id": "schools_metric",
+                "tool": "reproject",
+                "params": {"layer": "$steps.schools.layer", "target_srid": "EPSG:5254"},
+            },
+            {
+                "id": "roads_metric",
+                "tool": "reproject",
+                "params": {
+                    "layer": "$steps.main_roads.layer",
+                    "target_srid": "EPSG:5254",
+                },
+            },
+            {
+                "id": "school_zone",
+                "tool": "buffer_metric",
+                "params": {"layer": "$steps.schools_metric.layer", "distance_m": 500.0},
+            },
+            {
+                "id": "road_zone",
+                "tool": "buffer_metric",
+                "params": {"layer": "$steps.roads_metric.layer", "distance_m": 250.0},
+            },
+            {
+                "id": "candidates",
+                "tool": "intersect",
+                "params": {
+                    "layer": "$steps.school_zone.layer",
+                    "other": "$steps.road_zone.layer",
+                },
+            },
+            {
+                "id": "areas",
+                "tool": "calculate_area",
+                "params": {"layer": "$steps.candidates.layer", "output_field": "area_m2"},
+            },
+            {
+                "id": "school_distance",
+                "tool": "nearest_neighbor_distance",
+                "params": {
+                    "layer": "$steps.areas.layer",
+                    "other": "$steps.schools_metric.layer",
+                    "output_field": "school_distance_m",
+                },
+            },
+            {
+                "id": "road_distance",
+                "tool": "nearest_neighbor_distance",
+                "params": {
+                    "layer": "$steps.school_distance.layer",
+                    "other": "$steps.roads_metric.layer",
+                    "output_field": "road_distance_m",
+                },
+            },
+            {
+                "id": "scored",
+                "tool": "score_candidates",
+                "params": {
+                    "layer": "$steps.road_distance.layer",
+                    "criteria": [
+                        {
+                            "field": "school_distance_m",
+                            "direction": "minimize",
+                            "weight": 0.4,
+                        },
+                        {
+                            "field": "road_distance_m",
+                            "direction": "minimize",
+                            "weight": 0.4,
+                        },
+                        {"field": "area_m2", "direction": "maximize", "weight": 0.2},
+                    ],
+                },
+            },
+            {
+                "id": "display",
+                "tool": "reproject",
+                "params": {"layer": "$steps.scored.layer", "target_srid": "EPSG:4326"},
+            },
+        ],
+        "outputs": {"ranked_sites": "$steps.display.layer"},
+    }
+    composer, _ = composer_factory(plan)
+
+    composed = composer.compose("Rank rental sites near schools and main roads")
+    outputs = runner.run_spec(composed.spec, {})
+
+    ranked = ctx.read(outputs["ranked_sites"])
+    assert len(ranked) >= 1
+    assert "suitability_score" in ranked.columns
+    assert "suitability_rank" in ranked.columns
+    assert ranked["suitability_score"].between(0, 100).all()
+    assert ranked.crs.to_epsg() == 4326
+
+
 def test_recipe_store_matches_turkish_and_english(crs_info) -> None:
     store = RecipeStore()
     turkish = store.search("okula yakin kiralik ev icin uygun alan bul")

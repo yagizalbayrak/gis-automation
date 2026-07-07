@@ -21,6 +21,10 @@ RENTAL_COMMAND = (
     "Kutahya Evliya Celebi Mahallesi'nde okula 500 m, ana yollara 250 m "
     "mesafede kiralik ev icin uygun alanlari bul"
 )
+SCORED_RENTAL_COMMAND = (
+    "Kutahya Evliya Celebi Mahallesi'nde okula ve ana yollara yakin "
+    "kiralik ev aday alanlarini puanla ve sirala"
+)
 
 
 def _cycleway_length_plan() -> dict:
@@ -375,6 +379,22 @@ def test_composed_rental_scenario_end_to_end(client) -> None:
     ]
     # both buffers provably ran in the metric CRS, composed plan or not
     assert {g["detail"]["crs"] for g in buffer_guards} == {"EPSG:5254"}
+
+
+def test_composed_scored_rental_scenario_end_to_end(client) -> None:
+    task = _run_task(client, SCORED_RENTAL_COMMAND)
+    assert task["status"] == "succeeded"
+    assert task["mode"] == "composed"
+    assert task["workflow"] == "scored_rental_site_analysis"
+    assert len(task["plan"]) == 14
+    assert {"ranked_sites", "schools", "main_roads"} <= set(task["outputs"])
+
+    layer = client.get(f"/tasks/{task['task_id']}/layers/ranked_sites").json()
+    assert layer["display_srid"] == "EPSG:4326"
+    assert layer["feature_count"] >= 1
+    properties = layer["feature_collection"]["features"][0]["properties"]
+    assert "suitability_score" in properties
+    assert "suitability_rank" in properties
 
 
 def test_composed_scalar_and_table_results_are_exposed(tmp_path) -> None:

@@ -303,6 +303,94 @@ def test_nearest_neighbor_distance_matches_known_offsets(executor, ctx) -> None:
     assert out.max_distance_m == pytest.approx(40.0)
 
 
+def test_score_candidates_ranks_weighted_site_criteria(executor, ctx) -> None:
+    candidates = gpd.GeoDataFrame(
+        {
+            "site": ["balanced", "far", "tiny"],
+            "school_distance_m": [100.0, 900.0, 50.0],
+            "road_distance_m": [80.0, 100.0, 400.0],
+            "area_m2": [5_000.0, 8_000.0, 500.0],
+        },
+        geometry=[Point(0, 0), Point(1, 0), Point(2, 0)],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(candidates, name="candidate_sites")
+
+    out = executor.execute(
+        "score_candidates",
+        {
+            "layer": ref,
+            "criteria": (
+                {
+                    "field": "school_distance_m",
+                    "direction": "minimize",
+                    "weight": 0.45,
+                },
+                {
+                    "field": "road_distance_m",
+                    "direction": "minimize",
+                    "weight": 0.35,
+                },
+                {"field": "area_m2", "direction": "maximize", "weight": 0.20},
+            ),
+        },
+    )
+
+    scored = ctx.read(out.layer)
+    assert out.feature_count == 3
+    assert scored["site"].tolist()[0] == "balanced"
+    assert scored["suitability_rank"].tolist() == [1, 2, 3]
+    assert scored["suitability_score"].between(0, 100).all()
+    assert out.best_score == pytest.approx(scored["suitability_score"].iloc[0])
+
+
+def test_score_candidates_can_keep_top_n(executor, ctx) -> None:
+    candidates = gpd.GeoDataFrame(
+        {
+            "site": ["a", "b", "c"],
+            "distance_m": [10.0, 100.0, 1_000.0],
+        },
+        geometry=[Point(0, 0), Point(1, 0), Point(2, 0)],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(candidates, name="candidate_sites")
+
+    out = executor.execute(
+        "score_candidates",
+        {
+            "layer": ref,
+            "criteria": (
+                {"field": "distance_m", "direction": "minimize", "weight": 1.0},
+            ),
+            "top_n": 2,
+        },
+    )
+
+    scored = ctx.read(out.layer)
+    assert out.feature_count == 2
+    assert scored["site"].tolist() == ["a", "b"]
+
+
+def test_score_candidates_rejects_non_numeric_field(executor, ctx) -> None:
+    candidates = gpd.GeoDataFrame(
+        {"name": ["a", "b"]},
+        geometry=[Point(0, 0), Point(1, 0)],
+        crs="EPSG:5254",
+    )
+    ref = ctx.write(candidates, name="candidate_sites")
+
+    with pytest.raises(ToolExecutionError, match="non_numeric_field"):
+        executor.execute(
+            "score_candidates",
+            {
+                "layer": ref,
+                "criteria": (
+                    {"field": "name", "direction": "maximize", "weight": 1.0},
+                ),
+            },
+        )
+
+
 def test_merge_layers_concatenates_features(executor, ctx) -> None:
     first = gpd.GeoDataFrame(
         {"name": ["a"]}, geometry=[Point(0, 0)], crs="EPSG:5254"

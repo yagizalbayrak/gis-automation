@@ -11,7 +11,7 @@
 
 - **Product**: Autonomous GIS Workbench (`ageo`) - natural-language TR/EN
   geospatial automation. Brief: `PROJECT_BRIEF_FABLE5.md`.
-- **Tests**: 169/169 green, all offline (`uv run pytest`, ~2 s).
+- **Tests**: 178/178 green, all offline (`uv run pytest`, ~2 s).
 - **Web UI: React rewrite DONE** (owner-requested: "make it visually much
   better, React, your call on design") - see milestone 16. `frontend/`
   (Vite + TypeScript + Tailwind v4 + MapLibre GL + motion) replaces the
@@ -23,8 +23,9 @@
   on the build). **Docker build with the new frontend-builder stage was
   NOT verified this session** (no Docker daemon available) - next session
   should run it once.
-- **Tool registry**: 26 tools. All Tier-1 tools from the eval build list
-  (evals_results/FINDINGS.md) are now registered - see milestone 14.
+- **Tool registry**: 27 tools. All Tier-1 tools from the eval build list
+  (evals_results/FINDINGS.md) are registered, and `score_candidates` now
+  supports weighted site suitability ranking - see milestones 14 and 18.
 - **Progressive map rendering: DONE** (owner-requested, previously owed) -
   see milestone 15 (built against the vanilla UI) and milestone 16 (ported
   to the React UI, re-verified). Browser-verified with zero console
@@ -44,7 +45,10 @@
   there. Saved UI settings take precedence over `.env`.
 - **Verified against real data**: 576 named roads fetched from Overpass
   for Kutahya; real "Atatürk Bulvarı" buffered 25 m in EPSG:5254 and
-  rendered on the MapLibre map. Zero console errors.
+  rendered on the MapLibre map. The real OSM gateway now parses nodes,
+  open/closed ways and multipolygon relations, so schools/POIs, roads and
+  area candidates can all enter site-analysis plans as their real geometry
+  types. Zero console errors in the last browser verification run.
 - **Evaluation baseline** (see `evals_results/FINDINGS.md`): 50-scenario
   pool, Gemini 2.5 Flash - 49/50 behave as intended; 27 plans composed
   first-try (max 13 steps); 19 honest refusals naming missing
@@ -94,7 +98,7 @@ PlanComposer (one strong call composing a NEW WorkflowSpec-shaped JSON
 plan). Every plan - bundled or composed - must pass `validate_workflow()`
 (structure + static CRS-coherence simulation), then executes step-by-step
 through the guarded `ToolExecutor` (CRS/geometry guards, trace events).
-26 deterministic tools; geometries never enter LLM context (LayerRef
+27 deterministic tools; geometries never enter LLM context (LayerRef
 handles); per-task isolated workspace + trace; deterministic EN/TR
 Reporter. Full map in AGENTS.md section 3.
 
@@ -299,6 +303,29 @@ Reporter. Full map in AGENTS.md section 3.
     to accept the intentional 503 fallback on fresh clones, and verified
     the imported main tree with `npm --prefix frontend run build`,
     `uv run pytest`, and a FastAPI-served browser smoke test (169 tests).
+18. **Site suitability scoring tool** - added `score_candidates` in
+    `tools/impl/spatial_analysis.py` so composed site-analysis plans can
+    turn candidate polygons/grid cells into ranked alternatives using
+    weighted numeric criteria (`minimize` distance fields, `maximize`
+    area/capacity fields). Updated the proximity-site-search recipe to
+    teach the composer the pattern: `calculate_area` +
+    `nearest_neighbor_distance` + `score_candidates` before final display
+    reprojection. Covered direct ranking/top-N/non-numeric guard behavior
+    plus a 14-step composed scored rental-site plan through validator and
+    runner. Follow-up in the same thread: `DemoComposerLlm` now returns
+    the scored plan for rank/score/puanla/sirala prompts, so the live
+    `--demo` UI can exercise `score_candidates` without real LLM variance
+    (174 tests).
+19. **Real OSM geometry parsing for site analysis** - upgraded
+    `infrastructure/gis/overpass.py` from way-only extraction to a single
+    node/way/relation Overpass request with geometry typing: nodes become
+    points (schools/POIs), open ways stay lines (roads), closed area ways
+    become polygons, and multipolygon relations preserve outer/inner rings
+    before clipping to the selected boundary. Added focused offline gateway
+    tests covering query shape, school node + closed polygon parsing, open
+    highway lines and a relation with a hole. This is the data-grounding
+    piece needed for realistic site-analysis runs; the existing `--demo`
+    server remains intentionally synthetic/offline (178 tests).
 
 ## Key decisions (and why)
 
@@ -332,12 +359,23 @@ Reporter. Full map in AGENTS.md section 3.
 
 ## Next steps (agreed order)
 
-1. **Verify the Docker build** (milestone 16): `docker compose up --build
+1. **Realistic browser smoke test for site analysis**: restart the server
+   without `--demo`, run the Kutahya rental scoring prompt through the
+   React UI with the user's Gemini key, and inspect the trace/layers for
+   real schools, roads and candidate polygons. This hits Nominatim,
+   Overpass and the configured external LLM, so do it deliberately and log
+   any prompt/tool-contract failures.
+2. **Continue site-analysis capability buildout**: after `score_candidates`,
+   the next real site-analysis gaps are bulk/geocoding, network routing/
+   isochrones, and raster suitability layers (DEM slope + zonal stats);
+   each needs its own deterministic adapter/subsystem rather than prompt
+   tuning.
+3. **Verify the Docker build** (milestone 16): `docker compose up --build
    ageo-demo`, confirm the built React UI is actually reachable at
    `http://localhost:8001/` from inside the image (not just via the local
    `frontend-dev`/`ageo-demo` preview configs, which is all that could be
    tested this session - no Docker daemon was running in the sandbox).
-2. **Live-verify the 8 new Tier-1 tools** (milestone 14): re-run
+4. **Live-verify the 8 new Tier-1 tools** (milestone 14): re-run
    `uv run python -m ageo.evals --only S43 S44 S45 S46 S48 S49 S50` against
    the real Gemini key - **needs explicit user approval**, it spends real
    tokens - then flip each scenario's `expect` in `scenarios.json` from
@@ -346,8 +384,7 @@ Reporter. Full map in AGENTS.md section 3.
    after this: bulk `geocoding` (S42, Nominatim rate limits) and
    `batch_folder_processing` (S48 - folder-wide merge needs Phase 3 below,
    `merge_layers` alone only handles pre-loaded layers, not a folder scan).
-3. First real composer flight in the browser UI with the user's Gemini key
-   (eval ran headless; UI path untested with live LLM). A Settings UI tab
-   for the profile is a smaller, related companion task.
-4. Phase 3 batch folder processing; then pgvector RAG, PostGIS workspace
+5. A Settings UI tab for the profile is a smaller companion task after the
+   real browser composer flight.
+6. Phase 3 batch folder processing; then pgvector RAG, PostGIS workspace
    (AGENTS.md section 8).

@@ -127,7 +127,67 @@ RENTAL_SITE_SEARCH_PLAN: dict = {
     },
 }
 
+SCORED_RENTAL_SITE_SEARCH_PLAN: dict = {
+    "name": "scored_rental_site_analysis",
+    "summary": "Rank candidate rental areas near schools and main roads by "
+               "distance and area suitability.",
+    "steps": [
+        {"id": "neighborhood", "tool": "fetch_osm_boundary",
+         "params": {"place_name": "Evliya Celebi Mahallesi, Kutahya"}},
+        {"id": "schools", "tool": "fetch_osm_features",
+         "params": {"boundary": "$steps.neighborhood.layer",
+                    "key": "amenity", "value": "school"}},
+        {"id": "roads", "tool": "fetch_osm_features",
+         "params": {"boundary": "$steps.neighborhood.layer", "key": "highway"}},
+        {"id": "main_roads", "tool": "filter_by_attribute",
+         "params": {"layer": "$steps.roads.layer", "field": "highway",
+                    "in_values": ["primary", "secondary", "trunk"]}},
+        {"id": "schools_metric", "tool": "reproject",
+         "params": {"layer": "$steps.schools.layer", "target_srid": "EPSG:5254"}},
+        {"id": "roads_metric", "tool": "reproject",
+         "params": {"layer": "$steps.main_roads.layer", "target_srid": "EPSG:5254"}},
+        {"id": "school_zone", "tool": "buffer_metric",
+         "params": {"layer": "$steps.schools_metric.layer", "distance_m": 500.0}},
+        {"id": "road_zone", "tool": "buffer_metric",
+         "params": {"layer": "$steps.roads_metric.layer", "distance_m": 250.0}},
+        {"id": "candidates", "tool": "intersect",
+         "params": {"layer": "$steps.school_zone.layer",
+                    "other": "$steps.road_zone.layer"}},
+        {"id": "areas", "tool": "calculate_area",
+         "params": {"layer": "$steps.candidates.layer", "output_field": "area_m2"}},
+        {"id": "school_distance", "tool": "nearest_neighbor_distance",
+         "params": {"layer": "$steps.areas.layer",
+                    "other": "$steps.schools_metric.layer",
+                    "output_field": "school_distance_m"}},
+        {"id": "road_distance", "tool": "nearest_neighbor_distance",
+         "params": {"layer": "$steps.school_distance.layer",
+                    "other": "$steps.roads_metric.layer",
+                    "output_field": "road_distance_m"}},
+        {"id": "scored", "tool": "score_candidates",
+         "params": {"layer": "$steps.road_distance.layer",
+                    "criteria": [
+                        {"field": "school_distance_m", "direction": "minimize",
+                         "weight": 0.4},
+                        {"field": "road_distance_m", "direction": "minimize",
+                         "weight": 0.4},
+                        {"field": "area_m2", "direction": "maximize",
+                         "weight": 0.2},
+                    ]}},
+        {"id": "display", "tool": "reproject",
+         "params": {"layer": "$steps.scored.layer", "target_srid": "EPSG:4326"}},
+    ],
+    "outputs": {
+        "ranked_sites": "$steps.display.layer",
+        "schools": "$steps.schools.layer",
+        "main_roads": "$steps.main_roads.layer",
+    },
+}
+
 _SCENARIO_KEYWORDS = ("okul", "school", "kiralik", "rent", "ev ", "house")
+_SCORING_KEYWORDS = (
+    "rank", "score", "best", "prioritize", "puan", "sirala", "sırala",
+    "skor", "en iyi",
+)
 
 
 class DemoComposerLlm:
@@ -141,6 +201,8 @@ class DemoComposerLlm:
     ) -> dict:
         folded = text.lower()
         if any(keyword in folded for keyword in _SCENARIO_KEYWORDS):
+            if any(keyword in folded for keyword in _SCORING_KEYWORDS):
+                return SCORED_RENTAL_SITE_SEARCH_PLAN
             return RENTAL_SITE_SEARCH_PLAN
         raise GatewayError(
             "demo_composer: only the school/rental proximity scenario is "

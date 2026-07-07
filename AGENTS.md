@@ -128,12 +128,13 @@ src/ageo/
     tools/registry.py            ToolRegistry: import-time contract validation; catalog()
                                  is the LLM's ENTIRE view of the system
     tools/errors.py              typed failure taxonomy (guards vs execution vs gateways)
-    tools/impl/                  26 tools: io_vector (+DXF/KML), reproject, buffer,
+    tools/impl/                  27 tools: io_vector (+DXF/KML), reproject, buffer,
                                  measurements, geometry_quality, attributes, osm,
                                  overlay, aggregate (dissolve, merge_layers), join,
                                  packaging (+DXF/KML), geometry_ops (centroid,
                                  simplify_geometry), spatial_analysis
-                                 (count_points_in_polygons, nearest_neighbor_distance),
+                                 (count_points_in_polygons, nearest_neighbor_distance,
+                                 score_candidates),
                                  tessellation (voronoi_polygons, grid_generation),
                                  csv_import (csv_to_point_layer)
     workflows/spec.py            WorkflowSpec/Step/Param; "$params.x", "$steps.id.field"
@@ -171,8 +172,11 @@ src/ageo/
   infrastructure/
     gis/crs_info.py              PyprojCrsInfo (lru_cached facts; TUREF/UTM advisor)
     gis/workspace.py             InMemoryWorkspace : ToolContext (PostGIS swaps in here)
-    gis/overpass.py              real Nominatim+Overpass gateway (see pitfalls below)
-    gis/demo.py                  DemoOsmGateway + DemoComposerLlm + reference rental plan
+    gis/overpass.py              real Nominatim+Overpass gateway; fetches node/
+                                 way/relation elements and preserves point/line/
+                                 polygon/multipolygon geometry semantics
+    gis/demo.py                  DemoOsmGateway + DemoComposerLlm + reference rental
+                                 and scored rental plans
     llm/config.py                LlmConfigStore -> ~/.ageo/llm_settings.json (chmod 600),
                                  masked keys, live per-call resolution, PROVIDER_PRESETS
     llm/litellm_planner.py       the planner LLM call site
@@ -191,7 +195,7 @@ src/ageo/
                                  build` in frontend/, gitignored) - app.py mounts
                                  this at "/" LAST so it never shadows an API
                                  route; falls back to a 503 message if missing
-tests/                           169 tests, all offline; conftest has fixtures + FakeOsmGateway
+tests/                           178 tests, all offline; conftest has fixtures + FakeOsmGateway
 
 frontend/                        React + Vite + TypeScript + Tailwind v4 SPA
                                  (separate npm project, own package.json/
@@ -250,7 +254,7 @@ API surface.
 
 ```bash
 uv sync                                      # install (uv-managed venv)
-uv run pytest                                # 169 tests, offline, ~2s
+uv run pytest                                # 178 tests, offline, ~2s
 uv run python -m ageo.interface.api.serve           # real OSM gateway, :8000
 uv run python -m ageo.interface.api.serve --demo    # offline synthetic Kutahya
 ```
@@ -303,7 +307,7 @@ Studio key as `GEMINI_API_KEY=...`. Saved UI settings take precedence over
 
 See HANDOFF.md for the authoritative, session-updated state. Snapshot:
 
-- 169/169 tests green; zero browser console errors in verification runs.
+- 178/178 tests green; zero browser console errors in verification runs.
 - **The web UI is now a React SPA** (`frontend/` - Vite + TypeScript +
   Tailwind v4 + MapLibre GL + motion + lucide-react), replacing the
   original vanilla-JS `web/static/`. Same API contract, full feature

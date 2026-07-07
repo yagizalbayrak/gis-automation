@@ -12,7 +12,8 @@ import urllib.parse
 import urllib.request
 
 import geopandas as gpd
-from shapely.geometry import LineString, shape
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, shape
+from shapely.ops import unary_union
 
 from ageo.application.tools.errors import GatewayError
 
@@ -20,6 +21,10 @@ _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 _USER_AGENT = "ageo-autonomous-gis-workbench/0.1 (contact: ops@ageo.local)"
 _TIMEOUT_S = 60
+_AREA_TAG_KEYS = frozenset({
+    "amenity", "building", "healthcare", "landuse", "leisure", "office",
+    "shop", "tourism",
+})
 
 
 class OverpassOsmGateway:
@@ -80,7 +85,11 @@ class OverpassOsmGateway:
         extra = "".join(f'["{t}"]' for t in require_tags)
         overpass_query = (
             f"[out:json][timeout:{self._timeout_s}][maxsize:33554432];"
+            f"("
+            f"node[{tag}]{extra}({south},{west},{north},{east});"
             f"way[{tag}]{extra}({south},{west},{north},{east});"
+            f"relation[{tag}]{extra}({south},{west},{north},{east});"
+            f");"
             f"out geom tags;"
         )
         body = urllib.parse.urlencode({"data": overpass_query}).encode()
@@ -89,16 +98,20 @@ class OverpassOsmGateway:
         records: list[dict] = []
         geometries: list = []
         for element in payload.get("elements", []):
-            coords = [(pt["lon"], pt["lat"]) for pt in element.get("geometry", [])]
-            if len(coords) < 2:
-                continue
-            geometries.append(LineString(coords))
             tags = element.get("tags", {})
+            geometry = _geometry_from_element(element, key, tags)
+            if geometry is None or geometry.is_empty:
+                continue
+            geometries.append(geometry)
             records.append({
                 "osm_id": element.get("id"),
+                "osm_type": element.get("type"),
                 "name": tags.get("name"),
                 key: tags.get(key),
+                **tags,
             })
+        if not records:
+            return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
         gdf = gpd.GeoDataFrame(records, geometry=geometries, crs="EPSG:4326")
         if gdf.empty:
             return gdf
@@ -121,3 +134,80 @@ class OverpassOsmGateway:
                 return json.loads(response.read().decode())
         except Exception as exc:
             raise GatewayError(f"OSM gateway request failed: {exc}") from exc
+
+
+def _geometry_from_element(element: dict, key: str, tags: dict) -> object | None:
+    element_type = element.get("type")
+    if element_type == "node":
+        lon = element.get("lon")
+        lat = element.get("lat")
+        if lon is None or lat is None:
+            return None
+        return Point(float(lon), float(lat))
+
+    if element_type == "way":
+        coords = _coords(element.get("geometry", []))
+        if len(coords) < 2:
+            return None
+        if _is_area_feature(key, tags) and _is_closed(coords):
+            return Polygon(coords)
+        return LineString(coords)
+
+    if element_type == "relation":
+        return _relation_geometry(element, key, tags)
+    return None
+
+
+def _relation_geometry(element: dict, key: str, tags: dict) -> object | None:
+    if not _is_area_feature(key, tags):
+        return None
+    outers: list[Polygon] = []
+    inners: list[Polygon] = []
+    for member in element.get("members", []):
+        coords = _coords(member.get("geometry", []))
+        if len(coords) < 3:
+            continue
+        ring = _closed(coords)
+        polygon = Polygon(ring)
+        if not polygon.is_valid or polygon.is_empty:
+            continue
+        if member.get("role") == "inner":
+            inners.append(polygon)
+        else:
+            outers.append(polygon)
+    if not outers:
+        return None
+    geometry = unary_union(outers)
+    if inners:
+        geometry = geometry.difference(unary_union(inners))
+    if isinstance(geometry, (Polygon, MultiPolygon)) and not geometry.is_empty:
+        return geometry
+    return None
+
+
+def _coords(raw_geometry: list[dict]) -> list[tuple[float, float]]:
+    return [
+        (float(point["lon"]), float(point["lat"]))
+        for point in raw_geometry
+        if "lon" in point and "lat" in point
+    ]
+
+
+def _closed(coords: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if not coords:
+        return coords
+    if coords[0] == coords[-1]:
+        return coords
+    return [*coords, coords[0]]
+
+
+def _is_closed(coords: list[tuple[float, float]]) -> bool:
+    return len(coords) >= 4 and coords[0] == coords[-1]
+
+
+def _is_area_feature(key: str, tags: dict) -> bool:
+    if tags.get("area") == "yes":
+        return True
+    if tags.get("type") == "multipolygon":
+        return True
+    return key in _AREA_TAG_KEYS or any(tag in tags for tag in _AREA_TAG_KEYS)
